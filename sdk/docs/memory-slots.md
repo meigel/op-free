@@ -121,6 +121,7 @@ take no row in this table.
 | 67 | `opz_test_load` (hardware check H-C1 and Q-46: times the OS around its own render calls, reads the idle counter; 3.2 KB) | 60907 | built |
 | 65 | `opz_test_l2` (hardware check H-L2, Q-45: scans and times L2 SRAM above the OS image; 2.8 KB) | 60908 | built |
 | 34 | `opz_test_macro_full` (4.0 KB: test plug, `opz_test_macro_unbound` in fixed point; ~7x a voice's CPU budget, lead track only) | 60909 | built |
+| 31 | `crease` (synth, from the SDK template) | 60906 | scaffolded |
 
 ## Consequences
 

@@ -257,6 +257,19 @@ def cases_for(name, is_fx, quick=False, drum=False):
         out.append(case("19 voices, P1 255, P2 255", params(p1=255, p2=255), STRESS_NOTES, 4, 12 if quick else 40,
                         group="stress"))
         return out
+    if name == "crease":
+        out = [case("P1 %d, P2 %d" % (p1, p2), params(p1=p1, p2=p2), CHORD, 4, b)
+               for p1 in (0, 128, 255) for p2 in (0, 255)]
+        out.append(case("pluck P1 255, P2 255, decay 60, sustain 0", params(p1=255, p2=255, decay=60, sustain=0),
+                        CHORD, 4, b))
+        out.append(case("P1 255, P2 255, release from block 20", params(p1=255, p2=255), CHORD, 4, b,
+                        release_at=20 if not quick else 8))
+        out.append(case("high notes C6 G6 C7 E7, P1 255, P2 255", params(p1=255, p2=255), [84, 91, 96, 100], 4, b))
+        out.append(case("19 voices, P1 255, P2 255", params(p1=255, p2=255), STRESS_NOTES, 4, 12 if quick else 40,
+                        group="stress"))
+        out.append(case("P1 255, P2 255, glide 147 both directions", params(p1=255, p2=255), CHORD, 4, b,
+                        glide=147, glide_flip=2))
+        return out + knob_cases(False, b)
     if name == "dx":
         # P1 = 8 x patch + 4 (the middle of the patch's step); sustain 255 so the host envelope holds
         def dxp(n, p2=128, **kw):
