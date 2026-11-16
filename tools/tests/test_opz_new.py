@@ -193,7 +193,11 @@ class Scaffold(Base):
 
 @unittest.skipUnless(os.access(OPZSIM, os.X_OK) and shutil.which("clang"), "needs make -C sim and clang")
 class TemplatesRun(Base):
-    """Every template, scaffolded, compiles for the Mac and passes its own scenarios in opzsim."""
+    """Every template, scaffolded, compiles for the host and passes its own scenarios in opzsim.
+
+    The shared-library flags follow sim/Makefile: -dynamiclib on Darwin, -shared -fPIC -nostartfiles elsewhere
+    (no crtbeginS, so an ELF build has no .init_array or __cxa_finalize stub for the host to report).
+    """
 
     def test_scenarios_pass(self):
         for kind in opz_new.KINDS:
@@ -201,9 +205,10 @@ class TemplatesRun(Base):
             opz_new.run(namespace(name, kind), self.root, io.StringIO())
             d = os.path.join(self.root, "engines", name)
             dylib = os.path.join(self.root, name + ".dylib")
+            shared = ["-dynamiclib"] if sys.platform == "darwin" else ["-shared", "-fPIC", "-nostartfiles"]
             subprocess.run(["clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-ffreestanding",
-                            "-fno-common", "-ffp-contract=off", "-fno-stack-protector",
-                            "-I" + os.path.join(REPO, "sdk", "include"), "-dynamiclib", "-o", dylib,
+                            "-fno-common", "-ffp-contract=off", "-fno-stack-protector", "-D_DEFAULT_SOURCE",
+                            "-I" + os.path.join(REPO, "sdk", "include")] + shared + ["-o", dylib,
                             os.path.join(d, name + ".c")], check=True)
             with open(os.path.join(d, "plug.json")) as f:
                 plug = json.load(f)
