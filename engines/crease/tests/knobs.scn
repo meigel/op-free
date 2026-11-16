@@ -1,0 +1,24 @@
+# crease: P1 (fold) swept 0 -> 255 while a chord is held, then P2 (bias) 0 -> 255 over the same chord: the tone goes
+# from three saws to the folded layer, and from odd-only harmonics to the full set. A pitch bend moves the whole
+# voice. The level stays even across the sweep (the crossfade carries its own gain).
+tempo 120
+steps 32
+tail 2.0
+track chord
+preset 0 128 10 80 220 60 0 0 128 0 128 200 0 128 100 255 0 0
+sweep p1 0 255 0 16
+note 0 C3 16 100
+note 0 E3 16 100
+note 0 G3 16 100
+note 0 B3 16 100
+bend 8 200
+bend 12 -200
+bend 16 0
+sweep p2 0 255 16 32
+note 16 C3 16 100
+note 16 E3 16 100
+note 16 G3 16 100
+note 16 B3 16 100
+expect sound 0 32
+expect idle 70
+expect peak_below -6
