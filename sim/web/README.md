@@ -13,20 +13,29 @@ npm --prefix sim/web ci
 npm --prefix sim/web run dev        # http://localhost:5174/?engine=engines/fm2
 ```
 
-| File | Role |
-|---|---|
-| `catalog.ts` | Vite plugin: `/api/catalog` (engines and templates with plug.json, presets, scenarios, module URL) and `/files/…` (only `engines/`, `sdk/templates/`, `sim/build/wasm/`, `sim/build/samples/`) |
-| `src/wasi.ts` | the WASI preview1 calls the modules import, over an in-memory file system |
-| `src/opzsim.ts` | `runScenario` (opzsim's `main`) and `LiveEngine` (the `ws_*` entry points of `sim/wasm/websim.c`) |
-| `src/worklet.ts` | the AudioWorklet: the eight instrument tracks and the FX1 and FX2 slots |
-| `src/midimap.ts` | MIDI in: channel → track, OP-Z CC → parameter byte, MIDI learn (no DOM) |
-| `src/mixer.ts` | the send/return model: each send crossfades, an effect's dry level keeps the dry path, FX1 and FX2 in parallel, the tracks summed |
-| `src/main.ts`, `knob.ts`, `keyboard.ts`, `scope.ts` | the page |
+### On Debian and Ubuntu
 
-| Test | Checks | Needs |
-|---|---|---|
-| `npm test` | every `engines/*/tests/*.scn` rendered in wasm hashes as its golden file; the live path gives the same samples as the scenario path (templates, fm2, kit, swirl, filter); the mixer model; the MIDI map and learn | `make -C sim wasm` (skips without) |
-| `npm run test:e2e` | headless Chrome: each template, swirl, fm2 and kit played from the computer keyboard; effects on a generator; fm2 through a passthrough effect keeps its level as the send crossfades, and gains ~6 dB with dry level 255; through passthroughs on FX1 and FX2 at full send the returns add up (+6 dB); fm2 through swirl; a scenario run in the page matches its golden; MIDI: each channel plays its track, OP-Z CCs move the knobs and the page follows, learn survives a reload, the virtual OP-Z | the above and Chrome (`CHROME_PATH`) |
-| `npm run typecheck` | TypeScript | |
+The same three pieces are packaged, and `make -C sim wasm` finds them without arguments:
 
-Host CPU in the page is this browser's WebAssembly, not Blackfin cycles: for those run `python3 tools/opz_cycles.py`.
+```bash
+sudo apt install lld-21 libclang-rt-21-dev-wasm32 wasi-libc
+make -C sim wasm                       # 32 modules, no variables to set
+npm --prefix sim/web ci
+npm --prefix sim/web run dev           # http://localhost:5174/?engine=engines/crease
+```
+
+Two things this costs nobody and one that catches people out:
+
+- `wasm-ld` is not on `PATH` (`/usr/lib/llvm-21/bin/wasm-ld`) — the Makefile looks there.
+- Ubuntu ships compiler-rt's wasm builtins as `lib/wasi/libclang_rt.builtins-wasm32.a`, but the `wasm32-wasip1` triple
+  looks for `lib/wasm32-unknown-wasip1/libclang_rt.builtins.a`, so the link fails with a path that does not exist. The
+  Makefile picks `wasm32-wasi` when that is the only archive present; it is the same target under its older name.
+- **Start audio needs a real click.** A scripted `.click()` leaves the `AudioContext` suspended and the meters sit at
+  −∞ dBFS, which reads exactly like a silent engine.
+
+Without root the packages can be unpacked instead — `apt-get download` the four debs (`lld-19`, `libllvm19`,
+`wasi-libc`, `libclang-rt-21-dev-wasm32`), `dpkg-deb -x` them into a prefix, copy
+`lib/wasi/libclang_rt.builtins-wasm32.a` to `lib/wasm32-unknown-wasip1/libclang_rt.builtins.a`, and pass `WASM_CC`,
+`WASM_LD` and `WASI_SYSROOT`. Note that `/usr/bin/clang` is a shim that silently discards `-resource-dir`; a wrapper
+has to exec `/usr/lib/llvm-21/bin/clang` directly.
+

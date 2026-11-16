@@ -77,14 +77,21 @@ cycles:
 
 # ---- WebAssembly (sim/web): one module per engine, linked with this host -------------------------------------
 # Needs an LLVM with the wasm32 target, wasm-ld and a WASI sysroot; Apple's clang has no wasm32 target.
-#   brew install llvm lld wasi-libc wasi-runtimes        (sdk/docs/QUICKSTART.md)
+#   macOS:  brew install llvm lld wasi-libc wasi-runtimes   (sdk/docs/QUICKSTART.md)
+#   Ubuntu: sudo apt install lld-21 libclang-rt-21-dev-wasm32 wasi-libc
 # Override WASM_CC, WASM_LD and WASI_SYSROOT for another install (e.g. wasi-sdk: $WASI_SDK/bin/clang, its sysroot).
 BREW         := $(shell command -v brew 2>/dev/null)
 WASM_CC      ?= $(if $(BREW),$(shell brew --prefix llvm 2>/dev/null)/bin/clang,clang)
-WASM_LD      ?= $(if $(BREW),$(shell brew --prefix lld 2>/dev/null)/bin/wasm-ld,wasm-ld)
-WASI_SYSROOT ?= $(if $(BREW),$(shell brew --prefix 2>/dev/null)/share/wasi-sysroot,/opt/wasi-sdk/share/wasi-sysroot)
+# wasm-ld is not on PATH in every install: Debian and Ubuntu keep it under /usr/lib/llvm-*/bin.
+WASM_LD      ?= $(if $(BREW),$(shell brew --prefix lld 2>/dev/null)/bin/wasm-ld,$(or $(shell command -v wasm-ld 2>/dev/null),$(firstword $(wildcard /usr/lib/llvm-*/bin/wasm-ld))))
+# A wasi-sdk tree, or a distribution that unpacks the sysroot into /usr.
+WASI_SYSROOT ?= $(if $(BREW),$(shell brew --prefix 2>/dev/null)/share/wasi-sysroot,$(if $(wildcard /opt/wasi-sdk/share/wasi-sysroot/include/stdio.h),/opt/wasi-sdk/share/wasi-sysroot,$(if $(wildcard /usr/include/wasm32-wasip1/stdio.h)$(wildcard /usr/include/wasm32-wasi/stdio.h),/usr)))
+# Ubuntu's libclang-rt ships the wasm builtins as lib/wasi/libclang_rt.builtins-wasm32.a, which only the older
+# triple name searches for; wasm32-wasip1 asks for lib/wasm32-unknown-wasip1/libclang_rt.builtins.a and the link
+# stops. Pick the triple the installed compiler-rt actually has an archive for.
+WASM_TRIPLE  ?= $(shell test -f "$$($(WASM_CC) -print-resource-dir 2>/dev/null)/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a" && echo wasm32-wasip1 || echo wasm32-wasi)
 WASM         = $(BUILD)/wasm
-WASM_TARGET  = --target=wasm32-wasip1 --sysroot="$(WASI_SYSROOT)"
+WASM_TARGET  = --target=$(WASM_TRIPLE) --sysroot="$(WASI_SYSROOT)"
 WASM_CFLAGS  = $(WASM_TARGET) -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -ffp-contract=off -I../sdk/include -Isrc
 WASM_ENGINE_CFLAGS = $(WASM_TARGET) $(ENGINE_CFLAGS) -Wno-unknown-warning-option -Wno-unused-but-set-global
 # A reactor (no _start): the page calls _initialize, then ws_* for live play or opzsim_main for a scenario.
@@ -101,8 +108,9 @@ wasm-toolchain:
 		"install LLVM (brew install llvm lld wasi-libc wasi-runtimes) or set WASM_CC (sdk/docs/QUICKSTART.md)"; exit 1; }
 	@test -x "$(WASM_LD)" || command -v "$(WASM_LD)" >/dev/null || { echo "wasm: no wasm-ld at $(WASM_LD);" \
 		"brew install lld, or set WASM_LD"; exit 1; }
-	@test -f "$(WASI_SYSROOT)/include/wasm32-wasip1/stdio.h" -o -f "$(WASI_SYSROOT)/include/stdio.h" || { \
-		echo "wasm: no WASI sysroot at $(WASI_SYSROOT); brew install wasi-libc wasi-runtimes, or set WASI_SYSROOT"; \
+	@test -f "$(WASI_SYSROOT)/include/wasm32-wasip1/stdio.h" -o -f "$(WASI_SYSROOT)/include/wasm32-wasi/stdio.h" -o -f "$(WASI_SYSROOT)/include/stdio.h" || { \
+		echo "wasm: no WASI sysroot at $(WASI_SYSROOT); brew install wasi-libc wasi-runtimes,"; \
+		echo "      or sudo apt install wasi-libc, or set WASI_SYSROOT"; \
 		exit 1; }
 
 $(WASM)/obj/host/%.o: src/%.c src/host.h $(SDK_H) | wasm-toolchain

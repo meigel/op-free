@@ -50,9 +50,22 @@ host's `printf` and file reading (engines themselves still get no libc):
 brew install llvm lld wasi-libc wasi-runtimes
 ```
 
-`make -C sim wasm` finds them through `brew --prefix`. Elsewhere (Linux, or a [wasi-sdk](https://github.com/WebAssembly/wasi-sdk)
-download) point it at your install: `make -C sim wasm WASM_CC=/opt/wasi-sdk/bin/clang
-WASM_LD=/opt/wasi-sdk/bin/wasm-ld WASI_SYSROOT=/opt/wasi-sdk/share/wasi-sysroot`.
+On Debian and Ubuntu the same three pieces are packaged — `lld` provides `wasm-ld`, `libclang-rt` the wasm builtins,
+and `wasi-libc` the sysroot, which unpacks into `/usr`:
+
+```bash
+sudo apt install lld-21 libclang-rt-21-dev-wasm32 wasi-libc
+```
+
+`make -C sim wasm` finds them through `brew --prefix` on macOS and through `/usr` on Linux, including a compiler-rt
+quirk worth knowing: Ubuntu installs the wasm builtins as `lib/wasi/libclang_rt.builtins-wasm32.a`, while the
+`wasm32-wasip1` triple looks for `lib/wasm32-unknown-wasip1/libclang_rt.builtins.a` and the link stops. The Makefile
+therefore picks the triple the installed compiler-rt has an archive for, and passes the `wasm32-wasi` name when that is
+the only one available — the same target, older spelling, and the modules it produces are identical.
+
+For a [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) download or any other layout, point it at the install:
+`make -C sim wasm WASM_CC=/opt/wasi-sdk/bin/clang WASM_LD=/opt/wasi-sdk/bin/wasm-ld
+WASI_SYSROOT=/opt/wasi-sdk/share/wasi-sysroot`.
 
 ## 1. Check the simulator
 
