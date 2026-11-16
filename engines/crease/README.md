@@ -83,7 +83,7 @@ ear on the device.
 | Memory slot | 31 (10 KB class); the host build measures ~3.8 KB of code and data, so it has room to grow in the slot |
 | State | 32 B of 280 per voice (3 phases, sub phase, low-pass, DC blocker ×2, velocity gain, level/pan); `memRequest` 0 |
 | Voices | all of them: no voice pool, the cost is per voice and independent of the knob positions |
-| CPU | **156.7 cycles/sample/voice** (worst block 157.5, note-on 77) against the OS's 167 budget — `tight`, measured in the GNU Blackfin simulator with `python3 tools/opz_cycles.py engines/crease`, or `make -C sim cycles`. The case list in `tools/opz_cycles.py` covers the P1/P2 ends, a pluck, a release and 19 voices. Per sample the loop is 3 BLEP saws, 2 triangles, 2 one-poles, the shaper and 6 fractional multiplies — on the host it measures 22 ns/sample/voice against `super`'s 24, and `super` is known at 118 cycles/sample per voice, so ~110–130 cycles looks likely against the 167-cycle budget |
+| CPU | **162.4 cycles/sample/voice** (worst case 164.3 on a glide, note-on 77) against the OS's 167 budget — `tight`, measured in the GNU Blackfin simulator with `python3 tools/opz_cycles.py engines/crease`, or `make -C sim cycles`. The case list in `tools/opz_cycles.py` covers the P1/P2 ends, a pluck, a release and 19 voices. Per sample the loop is 3 BLEP saws, 2 triangles, 2 one-poles, the shaper and 6 fractional multiplies — on the host it measures 22 ns/sample/voice against `super`'s 24, and `super` is known at 118 cycles/sample per voice, so ~110–130 cycles looks likely against the 167-cycle budget |
 | Level | at track level 255: −12.7 dBFS peak at P1 0, −18.6 at P1 255 (a folded waveform is dense: its crest factor drops, while the RMS stays inside −24.9…−28.1 dBFS across the whole knob). A 4-note chord never clips (worst peak −3.7 dBFS at P1 0) |
 
 Tests ([tests/](tests/)): `basic` (notes across the range, dry and folded, gate, release, voices freed, level), `knobs`
@@ -97,9 +97,9 @@ bias).
 |---|---|---|
 | P1 | dry three-saw layer -> folded layer, then drive | centroid 356..917 Hz over the grid; RMS inside 3 dB |
 | P2 | fold asymmetry: hollow at the centre detent, even-harmonic rich either side | odd/even spread 8 dB median, 32 dB at P1 191 |
-| attack, decay, sustain, release | the envelope *also* drives the fold, gated by sustain | at S=0 the centroid falls 700 -> 595 Hz while the note decays; at S=255 it runs 437 -> 505 Hz |
+| attack, decay, sustain, release | the envelope *also* drives the fold, gated by sustain | at S=0 the centroid falls 869 -> 624 Hz while the note decays; at S=255 it runs 437 -> 505 Hz |
 | velocity | leans the fold by up to a quarter of the bias range | odd/even swing 9.4 dB from velocity 40 to 127 at P1 200 |
-| key | the fold ceiling follows the note | 98 % harmonic at C8 against 5 % with the ceiling disabled; inactive below C6 |
+| key | the fold ceiling follows the note | at C8 and fold 255 it cuts sub-fundamental (alias) energy from 0.09 % to 0.03 %; nothing measurable below C7 |
 | pan, level | TE's balance law, applied by the engine | level 128 = -6 dB, hard pans, level 0 silent |
 | LFO page | reaches fold and bias; the OS rewrites the word once per block, after its own 1/64 smoothing | tested with the simulator's `lfo` directive (`tests/lfo.scn`) |
 
