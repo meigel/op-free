@@ -169,8 +169,11 @@ int scenario_load(Scenario *sc, const char *path, int default_track, int default
     int note_id = 0;
     for (int line = 1; line <= nlines; line++) {
         char *s = lines[line - 1];
-        char *hash = strchr(s, '#');
-        if (hash) *hash = 0;
+        /* '#' opens a comment when it starts a token (line start or after whitespace). Inside a token it is a note's
+         * sharp (A#3, D#2), which parse_note accepts and the README documents: stripping from the first '#' alone
+         * silently cut those notes in half. */
+        for (char *p = s; *p; p++)
+            if (*p == '#' && (p == s || p[-1] == ' ' || p[-1] == '\t')) { *p = 0; break; }
         char *argv[32];
         int argc = 0;
         for (char *t = strtok(s, " \t\r\n"); t && argc < 32; t = strtok(NULL, " \t\r\n")) argv[argc++] = t;
