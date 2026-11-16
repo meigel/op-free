@@ -682,6 +682,8 @@ function vopzSync(): void {
 async function startAudio(): Promise<void> {
   if (state.ctx) {
     if (state.ctx.state === "suspended") await state.ctx.resume();
+    /* A context that was suspended and has now resumed may still hold voices from before: silence them. */
+    post({ type: "panic" });
     return;
   }
   const ctx = new AudioContext({ sampleRate: 44100, latencyHint: "interactive" });
@@ -902,11 +904,18 @@ $("tempo").addEventListener("change", (e) => post({ type: "tempo", bpm: Number((
 $("volume").addEventListener("input", (e) => {
   if (state.volume) state.volume.gain.value = Number((e.target as HTMLInputElement).value) / 100;
 });
-$("panic").addEventListener("click", () => {
+/** Everything off: the keyboard's own held notes, then every voice in every engine. */
+function panic(): void {
   keyboard.releaseAll();
   keyboard.clearMarks();
   post({ type: "panic" });
-});
+}
+$("panic").addEventListener("click", panic);
+/* A tab that goes to the background stops delivering keyup, and the worklet keeps rendering: a note held at that
+ * moment drones on with no way to release it, and the meters -- driven by requestAnimationFrame -- freeze, so it
+ * looks like nothing is sounding. Silence it on the way out and on the way back, and on every audio (re)start. */
+document.addEventListener("visibilitychange", panic);   /* both ways: leaving may strand a note, returning may resume it */
+window.addEventListener("pagehide", panic);
 $("velocity").addEventListener("input", (e) => (keyboard.velocity = Number((e.target as HTMLInputElement).value)));
 $("keys-target").addEventListener("change", () => keyboard.releaseAll());
 // a first key or click on the keyboard starts audio (browsers need a gesture)

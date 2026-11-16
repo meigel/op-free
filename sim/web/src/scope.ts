@@ -18,6 +18,7 @@ export class Scope {
   private r: AnalyserNode | null = null;
   private bufL = new Float32Array(2048);
   private bufR = new Float32Array(2048);
+  private timer: ReturnType<typeof setInterval> | null = null;
   private hold = { db: -Infinity, at: 0 };
   private clipAt = 0;
   /** Last reading, dBFS (for the page and the e2e tests). */
@@ -32,8 +33,18 @@ export class Scope {
   attach(l: AnalyserNode, r: AnalyserNode): void {
     this.l = l;
     this.r = r;
-    requestAnimationFrame(this.frame);
+    /* The meter runs on a timer, not on requestAnimationFrame: a backgrounded tab throttles frames to a stall, the
+     * level then reads whatever it last saw, and a voice droning in the background is invisible. One reading a
+     * second in the worst case still shows it. */
+    if (!this.timer) this.timer = setInterval(this.frame, 100);
+    requestAnimationFrame(this.paint);
   }
+
+  /** Drawing can stay on frames -- it only has to look right when the tab is visible. */
+  private paint = (): void => {
+    this.draw();
+    requestAnimationFrame(this.paint);
+  };
 
   /** Another source (a scenario render) into the same analysers. */
   connectExtra(split: ChannelSplitterNode): void {
@@ -48,8 +59,6 @@ export class Scope {
     this.l.getFloatTimeDomainData(this.bufL);
     this.r.getFloatTimeDomainData(this.bufR);
     this.meter();
-    this.draw();
-    requestAnimationFrame(this.frame);
   };
 
   private meter(): void {
