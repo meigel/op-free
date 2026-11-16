@@ -59,6 +59,10 @@ typedef struct State {
     fract32 lpf;               /* pre-shaper low-pass state */
     fract32 dc_x1, dc_y1;      /* DC blocker state */
     fract32 amp;               /* velocity x OUT_GAIN, Q31, set at note-on */
+    fract32 vel;               /* the note's velocity, Q31, kept for the drive accent */
+    fract32 prev_w;            /* crossfade weight at the end of the last block (intra-block ramp) */
+    fract32 prev_m;            /* shaper turn fraction at the end of the last block (0 = first block: snap) */
+    fract32 prev_bias;         /* bias at the end of the last block */
     OpzMix mix;                /* level and pan gains of the last block, for opz_mix_mono's ramp */
 } State;
 
@@ -106,6 +110,7 @@ void onNoteOn(int note, uint8_t velocity, void *state, const uint32_t *params)
     State *s = state;
     fract32 vel = (fract32)((uint32_t)(velocity > 127 ? 127 : velocity) * 0x01020408u);  /* v / 127 in Q31 */
     s->amp = opz_mul_q31(vel, OUT_GAIN);       /* a little under -12 dBFS at full velocity */
+    s->vel = vel;                              /* the folder opens a little further on an accent */
     /* All three saws start at their zero crossing (phase 0.5), i.e. at silence: a saw that started at its -1 edge
      * would step the DC blocker into a 50 ms low-frequency thump on every note. They spread from here by the detune
      * alone, so the attack is phase-locked and bright, then widens. */
@@ -144,13 +149,31 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
                                params[OPZ_P_RELEASE]);
 
     /* 3. Everything that depends only on the knobs and the pitch, once per block. */
+    /*    Pitch first: the folder's ceiling depends on it. Clamp to 11 kHz (as super does: the BLEP residual wants
+     *    room), then the two side saws detune around it. All three glide with the same slope, so a portamento moves
+     *    them together, and the anti-aliasing reciprocal is one call per saw (opz_blep_recip, no division). */
+    uint32_t inc = pitch;
+    if (inc > 0x40000000u) inc = 0x40000000u;
+    uint32_t delta = (uint32_t)opz_mul_q31((int32_t)inc, DETUNE);
+    uint32_t inc_a = inc, inc_b = inc + delta, inc_c = inc - delta;
+    uint32_t ra = opz_blep_recip(inc_a), rb = opz_blep_recip(inc_b), rc = opz_blep_recip(inc_c);
+
     /*    Folder drive: half a cycle of the shaper at P1 0, four cycles at 255. The shaper's phase is a Q31
      *    multiply (x * m, one turn) shifted left by k turns: m in Q31 holds the fraction, k the octave, so four
      *    turns still cost one multiply and one shift per sample and nothing overflows. Four is the cap: every turn
      *    multiplies the shaper's bandwidth, and at 44.1 kHz with no oversampling the extra ones only alias (measured
      *    on a C6: the band under 60 Hz rises 3 dB per turn past four). */
     uint32_t t = 0x8000u + (params[OPZ_P_P1] >> 13);   /* Q16 turns: 0.5 .. 4.5 */
+    /*    The ceiling first: four turns is the cap (every turn multiplies the shaper's bandwidth), and THEN the
+     *    note gives some of it back -- a high note needs to fold earlier than a low one. Doing it in this order is
+     *    what makes it bite: at P1 255 the raw 4.5 turns are capped at 4.0 and the note's increment comes off that,
+     *    so C6 gives up about 0.4 of a turn where subtracting first left the cap swallowing the whole reduction. */
     if (t > 0x3ffffu) t = 0x3ffffu;                    /* 4.0 */
+    if (t > 0x8000u) {
+        uint32_t nyq = inc >> 12;
+        uint32_t excess = t - 0x8000u;
+        t = 0x8000u + (excess > nyq ? excess - nyq : 0u);
+    }
     int k = t < 0x10000u ? 0 : t < 0x20000u ? 1 : 2;
     fract32 turn_m = (fract32)(t << (15 - k));         /* Q31, 0.5 .. 1.0 */
     /*    The dry-to-folded crossfade is P1 itself: at 0 the voice is the plain three-saw sound. */
@@ -158,22 +181,37 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
     /*    A folded waveform is denser than three saws: at the same peak it reads 6 dB louder (measured on A3: -24
      *    dBFS RMS dry, -18 folded). The crossfade carries the matching gain, so turning fold up changes the tone and
      *    not the level in the mix. */
-    fract32 amp = opz_mul_q31_q15(s->amp, (int32_t)(32767 - (w >> 17)));
 /*    Bias: P2 centred, scaled to +-0.15. The range is deliberately narrow: the shaper's phase is periodic in the
      *    bias, so a wider range wraps and the dial repeats itself. Measured at P1 191 (odd/even, dB, P2 0..255):
      *    +-0.3 gave -7.7 / +13.3 / -18.7 / +12.9 / -7.7 -- the ends sound like the centre-quarter, a dead feel;
      *    +-0.15 gives +13.2 / +0.5 / -18.7 / +0.6 / +12.9, monotone on each side of the centre detent, 32 dB end
      *    to end. At P1 255 the same sweep spans 38 dB. */
     fract32 bias = opz_mul_q31((fract32)((int32_t)(params[OPZ_P_P2] & OPZ_Q31_ONE) - 0x40000000), 0x26666666);
+    /*    Velocity leans the fold as well, by up to a quarter of the dial's own range: an accent changes colour, not
+     *    only level. The turn count was the obvious target and was measured as the wrong one -- at P1 200 it sits at
+     *    3.6 of a 4.0 cap, so a fifth more turns moved the centroid by 8 Hz. Bias moves the odd/even balance by tens
+     *    of dB, so the same effort is audible. */
+    bias = opz_add_q31(bias, opz_mul_q31(opz_mul_q31(s->vel, 0x06666666), 0x26666666));
 
-    /*    Pitch: clamp to 11 kHz (as super does: the BLEP residual wants room), then the two saws detuned around
-     *    it. All three glide with the same slope, so a portamento moves them together. */
-    uint32_t inc = pitch;
-    if (inc > 0x40000000u) inc = 0x40000000u;
-    uint32_t delta = (uint32_t)opz_mul_q31((int32_t)inc, DETUNE);
-    uint32_t inc_a = inc, inc_b = inc + delta, inc_c = inc - delta;
-    /*    The anti-aliasing reciprocal of each saw, once per block (no division: opz_blep_recip). */
-    uint32_t ra = opz_blep_recip(inc_a), rb = opz_blep_recip(inc_b), rc = opz_blep_recip(inc_c);
+    /*    Page 2 as a timbre control, gated by sustain. At full sustain the envelope is a VCA and the fold is P1's
+     *    alone (a pad keeps its tone); as sustain falls the envelope's own shape opens the folder, which is what makes
+     *    a short decay a pluck rather than a gate. It costs nothing extra: the level is already in the loop. */
+    fract32 edepth = opz_mul_q31((fract32)(OPZ_Q31_ONE - (params[OPZ_P_SUSTAIN] & OPZ_Q31_ONE)), 0x4CCCCCCD);
+
+    /*    Intra-block interpolation. The OS rewrites a parameter once per block, so a fast LFO aimed at P1 or P2
+     *    steps the control at 2.76 kHz; ramping the three continuous controls across the 16 samples is what keeps
+     *    that from zipping. prev_m == 0 only on the first block after init(), where there is nothing to ramp from. */
+    fract32 w_i = s->prev_w, b_i = s->prev_bias, m_i = s->prev_m;
+    fract32 dw, db, dm;
+    if (s->prev_m == 0) {
+        w_i = w; b_i = bias; m_i = turn_m;
+        dw = db = dm = 0;
+    } else {
+        dw = (fract32)((uint32_t)w - (uint32_t)s->prev_w) >> 4;
+        db = (fract32)((uint32_t)bias - (uint32_t)s->prev_bias) >> 4;
+        dm = (fract32)((uint32_t)turn_m - (uint32_t)s->prev_m) >> 4;
+    }
+
 
     /* 4. The envelope's level and per-sample coefficients live in locals for the loop, and go back at the end.
      *    Locals, not s->...: the compiler must assume a write to out[] could change *s, and would reload it. */
@@ -196,20 +234,25 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
         fract32 lp = opz_add_q31(s->lpf, opz_mul_q31_q15(opz_sub_q31(core, s->lpf), LP_A));
         s->lpf = lp;
         /* the folder: one multiply for the turn count (x * m, one turn), one shift for the octave, then the shaper */
-        fract32 u = opz_add_q31(lp, bias);
-        fract32 folded = opz_sine(((uint32_t)opz_mul_q31(u, turn_m)) << k);
+        fract32 u = opz_add_q31(lp, b_i);
+        /* the envelope on the folder, gated by sustain: a pluck's decay opens and closes the folds */
+        u = opz_add_q31(u, opz_mul_q31(u, opz_mul_q31(edepth, level)));
+        fract32 folded = opz_sine(((uint32_t)opz_mul_q31(u, m_i)) << k);
 
         /* P1 crossfades the folded layer in over the dry saws. Only the folded layer is DC-blocked: a saw has no DC
          * of its own, and its -2 wrap step saturates a Q31 blocker (measured: 0.3 mean and full-scale peaks). The
          * shaper's output is smooth, so the blocker only sees the bias's offset. */
-        fract32 y = opz_lerp(saw, dc_block(s, folded), w);
-        /* level: velocity and the envelope */
-        mono[i] = opz_mul_q31(opz_mul_q31(y, amp), level);
+        fract32 y = opz_lerp(saw, dc_block(s, folded), w_i);
+        /* level: velocity, the envelope, and the matched gain the interpolated crossfade implies */
+        fract32 amp_i = opz_mul_q31_q15(s->amp, (int32_t)(32767 - ((uint32_t)w_i >> 17)));
+        mono[i] = opz_mul_q31(opz_mul_q31(y, amp_i), level);
         /* advance: envelope, phases (wrapping is what we want), pitch glide */
         level = opz_env_tick(level, coef, step);
         pa += inc_a; pb += inc_b; pc += inc_c; psub += inc >> 1;
         inc_a += (uint32_t)pitchSlope; inc_b += (uint32_t)pitchSlope; inc_c += (uint32_t)pitchSlope;
+        w_i += dw; b_i += db; m_i += dm;
     }
+    s->prev_w = w; s->prev_bias = bias; s->prev_m = turn_m;
 
     /* 5. The track's level and pan, ADDED into both channels of the interleaved buffer, saturating. */
     opz_mix_mono(out, mono, &s->mix, params);

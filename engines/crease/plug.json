@@ -2,7 +2,16 @@
   "engine": "crease",
   "memoryslot": 31,
   "engine_version": 1,
-  "plug": { "id": 60906, "version": 1, "name": "crease", "trackmask": 240, "flags": 0,
-            "parameter_names": ["fold", "bias"] },
+  "plug": {
+    "id": 60906,
+    "version": 1,
+    "name": "crease",
+    "trackmask": 240,
+    "flags": 16,
+    "parameter_names": [
+      "fold",
+      "bias"
+    ]
+  },
   "presets": "presets.json"
 }
