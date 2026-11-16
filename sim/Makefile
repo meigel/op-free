@@ -89,7 +89,7 @@ WASI_SYSROOT ?= $(if $(BREW),$(shell brew --prefix 2>/dev/null)/share/wasi-sysro
 # Ubuntu's libclang-rt ships the wasm builtins as lib/wasi/libclang_rt.builtins-wasm32.a, which only the older
 # triple name searches for; wasm32-wasip1 asks for lib/wasm32-unknown-wasip1/libclang_rt.builtins.a and the link
 # stops. Pick the triple the installed compiler-rt actually has an archive for.
-WASM_TRIPLE  ?= $(shell test -f "$$($(WASM_CC) -print-resource-dir 2>/dev/null)/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a" && echo wasm32-wasip1 || echo wasm32-wasi)
+WASM_TRIPLE  ?= $(shell test -f "$$("$(WASM_CC)" -print-resource-dir 2>/dev/null)/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a" && echo wasm32-wasip1 || echo wasm32-wasi)
 WASM         = $(BUILD)/wasm
 WASM_TARGET  = --target=$(WASM_TRIPLE) --sysroot="$(WASI_SYSROOT)"
 WASM_CFLAGS  = $(WASM_TARGET) -std=c11 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -ffp-contract=off -I../sdk/include -Isrc

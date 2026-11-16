@@ -696,13 +696,24 @@ function vopzSync(): void {
 
 async function startAudio(): Promise<void> {
   if (state.ctx) {
+    /* No panic here. Every key on the on-screen keyboard starts audio from inside its own pointerdown, so a panic
+     * on this path releases the note that asked for it. A genuine resume is caught by the statechange listener
+     * below, which is also the only path a browser-driven suspension takes. */
     if (state.ctx.state === "suspended") await state.ctx.resume();
-    /* A context that was suspended and has now resumed may still hold voices from before: silence them. */
-    post({ type: "panic" });
     return;
   }
   const ctx = new AudioContext({ sampleRate: 44100, latencyHint: "interactive" });
   state.ctx = ctx;
+  /* A context the browser suspended -- a device change, a page freeze, a tab policy -- can come back with voices
+   * still sounding, and nothing else notices, because the document may never have been hidden. Clear them on the
+   * transition, not on the first start: that one has nothing to clear and may be caused by the very note we must
+   * not swallow. */
+  let firstRun = ctx.state !== "running";
+  ctx.addEventListener("statechange", () => {
+    if (ctx.state !== "running") return;
+    if (firstRun) { firstRun = false; return; }
+    panic();
+  });
   await ctx.audioWorklet.addModule(new URL("./worklet.ts", import.meta.url));
   const node = new AudioWorkletNode(ctx, "opzsim", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
   const analyser = ctx.createAnalyser(), analyserR = ctx.createAnalyser();
