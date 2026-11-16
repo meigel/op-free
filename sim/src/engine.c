@@ -116,6 +116,12 @@ int engine_inspect_size(const char *path, SlotSize *s)
  * tables) is left out, as the Mach-O path leaves out stubs and GOT. */
 #include <elf.h>
 
+/* A range inside the mapped file, without wrapping: off <= n and len <= n - off. */
+static int elf_range(uint64_t off, uint64_t len, size_t n)
+{
+    return off <= (uint64_t)n && len <= (uint64_t)n - off;
+}
+
 static void add_section_elf(SlotSize *s, const char *name, uint32_t type, uint64_t size)
 {
     if (!strcmp(name, ".init_array")) s->has_constructors = 1;
@@ -149,27 +155,37 @@ int engine_inspect_size(const char *path, SlotSize *s)
     if (memcmp(eh->e_ident, ELFMAG, SELFMAG) || eh->e_ident[EI_CLASS] != ELFCLASS64 ||
         eh->e_ident[EI_DATA] != ELFDATA2LSB || eh->e_shentsize != sizeof(Elf64_Shdr) || !eh->e_shnum ||
         eh->e_shstrndx >= eh->e_shnum ||
-        (size_t)eh->e_shoff + (size_t)eh->e_shnum * sizeof(Elf64_Shdr) > (size_t)n)
+        !elf_range(eh->e_shoff, (uint64_t)eh->e_shnum * sizeof(Elf64_Shdr), (size_t)n))
         goto out;
 
     const Elf64_Shdr *sh = (const void *)(p + eh->e_shoff);
     const Elf64_Shdr *strsh = &sh[eh->e_shstrndx];
-    if ((size_t)strsh->sh_offset + strsh->sh_size > (size_t)n) goto out;
+    if (!elf_range(strsh->sh_offset, strsh->sh_size, (size_t)n)) goto out;
     const char *shstr = (const char *)(p + strsh->sh_offset);
     const Elf64_Shdr *dynsym = NULL;
 
     for (uint32_t i = 0; i < eh->e_shnum; i++) {
-        const char *name = sh[i].sh_name < strsh->sh_size ? shstr + sh[i].sh_name : "";
+        const char *name = "";
+        if (sh[i].sh_name < strsh->sh_size) {
+            const char *c = shstr + sh[i].sh_name;
+            /* a name that does not terminate inside its table is not a name */
+            if (memchr(c, 0, (size_t)(strsh->sh_size - sh[i].sh_name))) name = c;
+        }
         add_section_elf(s, name, sh[i].sh_type, sh[i].sh_size);
         if (sh[i].sh_type == SHT_DYNSYM && sh[i].sh_link < eh->e_shnum) dynsym = &sh[i];
     }
 
-    if (dynsym && dynsym->sh_entsize == sizeof(Elf64_Sym)) {
+    const Elf64_Shdr *strtab = dynsym ? &sh[dynsym->sh_link] : NULL;
+    if (dynsym && dynsym->sh_entsize == sizeof(Elf64_Sym) &&
+        elf_range(dynsym->sh_offset, dynsym->sh_size, (size_t)n) &&
+        elf_range(strtab->sh_offset, strtab->sh_size, (size_t)n)) {
         const Elf64_Sym *sym = (const void *)(p + dynsym->sh_offset);
-        const char *str = (const char *)(p + sh[dynsym->sh_link].sh_offset);
+        const char *str = (const char *)(p + strtab->sh_offset);
         uint32_t count = (uint32_t)(dynsym->sh_size / sizeof(Elf64_Sym));
         for (uint32_t k = 0; k < count; k++) {
             if (sym[k].st_shndx != SHN_UNDEF || ELF64_ST_BIND(sym[k].st_info) == STB_LOCAL) continue;
+            if (sym[k].st_name >= strtab->sh_size) continue;                /* outside the string table */
+            if (!memchr(str + sym[k].st_name, 0, (size_t)(strtab->sh_size - sym[k].st_name))) continue;
             const char *nm = str + sym[k].st_name;
             size_t used = strlen(s->undefined);
             snprintf(s->undefined + used, sizeof s->undefined - used, "%s%s", used ? ", " : "", nm);

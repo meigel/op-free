@@ -22,7 +22,7 @@ SHARED  = -dynamiclib
 LIBS    =
 else
 SHARED  = -shared -fPIC -nostartfiles  # no crtbeginS: no .init_array, no __cxa_finalize/ITM stubs to report as imports
-LIBS    = -lm          # libm is a separate library outside macOS
+LIBS    = -lm -ldl     # libm is separate outside macOS; dlopen needs libdl before glibc 2.34
 endif
 PORT_CFLAGS = -D_DEFAULT_SOURCE
 CFLAGS  = -std=c11 -O2 -Wall -Wextra -ffp-contract=off -I../sdk/include $(PORT_CFLAGS)
