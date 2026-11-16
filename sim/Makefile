@@ -1,6 +1,6 @@
-# opzsim — OP-Z engine host simulator for macOS.
+# opzsim — OP-Z engine host simulator for macOS and Linux.
 #
-#   make -C sim          build opzsim and every engine under engines/ as a dylib
+#   make -C sim          build opzsim and every engine under engines/ as a shared library
 #   make -C sim test     build, then run the host checks and golden-render tests
 #   make -C sim golden   re-render and overwrite the golden hashes (review the diff!)
 #   ENGINE=name          with test or golden: only that engine's golden renders (host checks still run on test)
@@ -9,12 +9,25 @@
 #   make -C sim wasm-test  build them, then check every scenario rendered in wasm against the golden hashes
 #
 # Paths stay relative: the repository path contains spaces.
+# Host builds are bit-identical across macOS and Linux (same golden hashes): the host and the engines are integer
+# code with -ffp-contract=off, and the rendered WAVs come out the same bytes.
 
 CC      = clang
 BUILD   = build
-CFLAGS  = -std=c11 -O2 -Wall -Wextra -ffp-contract=off -I../sdk/include
-# Engines: freestanding, integer only. -ffp-contract=off keeps any stray float maths identical across Macs.
-ENGINE_CFLAGS = -std=c11 -O2 -Wall -Wextra -ffreestanding -fno-common -ffp-contract=off -fno-stack-protector -I../sdk/include
+# The host is written against POSIX (clock_gettime, strdup) and C99 maths; glibc needs the feature macro,
+# macOS does not mind it. Darwin links engines as dylibs, everything else as shared objects.
+UNAME_S = $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+SHARED  = -dynamiclib
+LIBS    =
+else
+SHARED  = -shared -fPIC -nostartfiles  # no crtbeginS: no .init_array, no __cxa_finalize/ITM stubs to report as imports
+LIBS    = -lm -ldl     # libm is separate outside macOS; dlopen needs libdl before glibc 2.34
+endif
+PORT_CFLAGS = -D_DEFAULT_SOURCE
+CFLAGS  = -std=c11 -O2 -Wall -Wextra -ffp-contract=off -I../sdk/include $(PORT_CFLAGS)
+# Engines: freestanding, integer only. -ffp-contract=off keeps any stray float maths identical across hosts.
+ENGINE_CFLAGS = -std=c11 -O2 -Wall -Wextra -ffreestanding -fno-common -ffp-contract=off -fno-stack-protector -I../sdk/include $(PORT_CFLAGS)
 
 SIM_SRC  = $(wildcard src/*.c)
 ENGINES  = $(patsubst ../engines/%/plug.json,%,$(wildcard ../engines/*/plug.json))
@@ -29,18 +42,18 @@ all: $(BUILD)/opzsim $(DYLIBS) $(FIXTURES) $(TESTKIT)
 
 $(BUILD)/opzsim: $(SIM_SRC) src/host.h ../sdk/include/opz_engine.h ../sdk/include/opz_tables.h ../sdk/include/opz_tables_gen.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $(SIM_SRC)
+	$(CC) $(CFLAGS) -o $@ $(SIM_SRC) $(LIBS)
 
 define ENGINE_RULE
 $(BUILD)/engines/$(1).dylib: $(wildcard ../engines/$(1)/*.c) $(wildcard ../engines/$(1)/*.h) $(SDK_H)
 	@mkdir -p $(BUILD)/engines
-	$(CC) $(ENGINE_CFLAGS) -dynamiclib -o $$@ $(wildcard ../engines/$(1)/*.c)
+	$(CC) $(ENGINE_CFLAGS) $(SHARED) -o $$@ $(wildcard ../engines/$(1)/*.c)
 endef
 $(foreach e,$(ENGINES),$(eval $(call ENGINE_RULE,$(e))))
 
 $(BUILD)/fixtures/%.dylib: tests/fixtures/%.c $(SDK_H)
 	@mkdir -p $(BUILD)/fixtures
-	$(CC) $(ENGINE_CFLAGS) -dynamiclib -o $@ $<
+	$(CC) $(ENGINE_CFLAGS) $(SHARED) -o $@ $<
 
 # Sample packs for the scenarios that attach one (opzk_testkit*.aif, opzk_plain.aif): synthesised, never committed.
 $(TESTKIT): tests/testkit.py ../tools/opz_samples.py

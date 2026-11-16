@@ -1,6 +1,7 @@
 # Checks every push and pull request with what runs without the Blackfin toolchain: the host simulator and every
 # engine's golden renders, the tools tests, and the USB MIDI core. The simulator builds engines as macOS dylibs with
-# Apple's clang (sim/Makefile), so the first two jobs run on macOS.
+# Apple's clang and as ELF shared objects with Linux clang (sim/Makefile), and both produce the same golden hashes,
+# so the simulator and tools jobs run on both.
 name: CI
 
 on:
@@ -14,13 +15,21 @@ permissions:
 
 jobs:
   simulator:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: make -C sim test
 
   tools:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

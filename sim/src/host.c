@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 #include "host.h"
 
@@ -407,6 +408,21 @@ void host_block(const Scenario *sc, HostInput *in, int64_t in_t, fract32 *l, fra
             Track *tr = &g_tracks[t];
             tr->current[i] += (uint32_t)((int32_t)(tr->target[i] - tr->current[i]) >> 6);
         }
+
+    /* The track LFO, in the order the device uses: the smoothing above runs first, then the LFO *overwrites* one
+     * word, so a fast LFO on a dial steps the value the engine sees even though the dial itself was smoothed.
+     * `lfo NAME RATE_HZ DEPTH` in a scenario; silent when lfo_target is -1. */
+    if (sc->lfo_target >= 0) {
+        for (int t = 0; t < SIM_INSTR_TRACKS; t++) {
+            Track *tr = &g_tracks[t];
+            if (!tr->nvoices && !sc->track_used[t]) continue;
+            double v = 0.5 + 0.5 * sc->lfo_depth * sin(6.283185307179586 * tr->lfo_phase);
+            tr->lfo_phase += sc->lfo_rate_hz * OPZ_BLOCK_FRAMES / (double)OPZ_SAMPLE_RATE;
+            if (tr->lfo_phase >= 1.0) tr->lfo_phase -= (double)(long)tr->lfo_phase;
+            uint32_t w = (uint32_t)(v * 2147483647.0);
+            tr->current[sc->lfo_target] = w > 0x7FFFFFFFu ? 0x7FFFFFFFu : w;   /* the OS clamps it */
+        }
+    }
 
     /* instruments: every voice of a track adds into the same mono buffer */
     int active = 0;
