@@ -42,6 +42,8 @@
 
 /* DC blocker: one-pole high-pass at about 10 Hz, R = 1 - 2 pi 10 / 44100 in Q15. */
 #define DC_R 32720
+#define INC_MIN 0x8000        /* about a third of a hertz: below this the phase stalls, above INC_MAX it aliases */
+#define INC_MAX 0x40000000u   /* 11 kHz, the same ceiling the block-start pitch gets */
 
 /* One-pole low-pass at 6 kHz in front of the folder: a = 1 - exp(-2 pi 6000 / 44100) in Q15. */
 #define LP_A 16695
@@ -69,13 +71,19 @@ _Static_assert(sizeof(State) <= OPZ_VOICE_STATE_BYTES, "voice state must fit in 
 static const ModuleCallbackInterface *s_cb;
 
 /* One-pole DC blocker: y = x - x1 + R y1. The bias leans the folder's output off centre, and DC on a track is
- * headroom spent on nothing. */
+ * headroom spent on nothing.
+ *
+ * It runs at half scale. A highpass passes twice its input on a step, and Q31 has no room for that: the
+ * (x - x1) difference saturated on high notes -- 1,608 of 4,410 samples at C8 with P1 and P2 at 255. Halved, the
+ * difference cannot reach full scale, and the doubling on the way out is a saturating add, so only a genuine
+ * overshoot gives way instead of corrupting the filter state. */
 static inline __attribute__((always_inline)) fract32 dc_block(State *s, fract32 x)
 {
-    fract32 y = opz_add_q31(opz_sub_q31(x, s->dc_x1), opz_mul_q31_q15(s->dc_y1, DC_R));
-    s->dc_x1 = x;
+    fract32 h = x >> 1;
+    fract32 y = opz_add_q31(opz_sub_q31(h, s->dc_x1), opz_mul_q31_q15(s->dc_y1, DC_R));
+    s->dc_x1 = h;
     s->dc_y1 = y;
-    return y;
+    return opz_add_q31(y, y);
 }
 
 /* ---- entry points ---------------------------------------------------------------------------------------------- */
@@ -145,11 +153,10 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
                                params[OPZ_P_RELEASE]);
 
     /* 3. Everything that depends only on the knobs and the pitch, once per block. */
-    /*    Pitch first: the folder's ceiling depends on it. Clamp to 11 kHz (as super does: the BLEP residual wants
-     *    room), then the two saws detune around it. They glide with the same slope, so a portamento moves them
-     *    together, and the anti-aliasing reciprocal is one call per saw (opz_blep_recip, no division). */
+    /*    Pitch first: the folder's ceiling depends on it. Clamp to 11 kHz, then the two triangles detune around it.
+     *    They glide with the same slope, so a portamento moves them together. */
     uint32_t inc = pitch;
-    if (inc > 0x40000000u) inc = 0x40000000u;
+    if (inc > INC_MAX) inc = INC_MAX;
     uint32_t delta = (uint32_t)opz_mul_q31((int32_t)inc, DETUNE);
     uint32_t inc_a = inc + delta, inc_b = inc - delta;
 
@@ -205,13 +212,29 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
 
     /* 4. The envelope's level and per-sample coefficients live in locals for the loop, and go back at the end.
      *    Locals, not s->...: the compiler must assume a write to out[] could change *s, and would reload it. */
+    /* The glide walks both increments every sample, and a downward bend from a clamped start can take them to or past
+     * zero, where the unsigned phase wraps to a near-Nyquist increment. Clamping each increment per sample was safe
+     * and cost 27 cycles/sample; a block is a straight line, so its two endpoints decide whether it stays inside
+     * [INC_MIN, INC_MAX] and the slope is shortened once instead. Dropping the glide to zero is the other half: a
+     * block without one keeps the two adds it always had. */
+    int32_t slope_a = pitchSlope, slope_b = pitchSlope;
+    if (pitchSlope) {
+        const int64_t lo = (int64_t)(int32_t)INC_MIN, hi = (int64_t)(int32_t)INC_MAX;
+        const int64_t end_a = (int64_t)(int32_t)inc_a + (int64_t)OPZ_BLOCK_FRAMES * pitchSlope;
+        const int64_t end_b = (int64_t)(int32_t)inc_b + (int64_t)OPZ_BLOCK_FRAMES * pitchSlope;
+        if (end_a < lo)      slope_a = (int32_t)((lo - (int32_t)inc_a) / OPZ_BLOCK_FRAMES);
+        else if (end_a > hi) slope_a = (int32_t)((hi - (int32_t)inc_a) / OPZ_BLOCK_FRAMES);
+        if (end_b < lo)      slope_b = (int32_t)((lo - (int32_t)inc_b) / OPZ_BLOCK_FRAMES);
+        else if (end_b > hi) slope_b = (int32_t)((hi - (int32_t)inc_b) / OPZ_BLOCK_FRAMES);
+    }
+
     int32_t level = OPZ_ADSR_LEVEL(env), coef = OPZ_ADSR_COEF(env), step = OPZ_ADSR_STEP(env);
     uint32_t pa = s->ph_a, pb = s->ph_b;
     fract32 mono[OPZ_BLOCK_FRAMES];                         /* the voice, before level and pan */
 
     for (int i = 0; i < OPZ_BLOCK_FRAMES; i++) {
-        /* The dry layer: two band-limited saws at half scale each, so their sum reaches exactly +-1 when they line
-         * up (they do, every beat of the detune) and nothing saturates on the way. */
+        /* The dry layer: two triangles at half scale each, so their sum reaches exactly +-1 when they line up (they
+         * do, every beat of the detune) and nothing saturates on the way. */
         fract32 tri = opz_add_q31(opz_tri(pa) >> 1, opz_tri(pb) >> 1);
 
         /* The folded layer: a triangle core and the triangle sub, folded. Triangles, not the saws: the shaper
@@ -227,10 +250,12 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
         if (env_fold) u = opz_add_q31(u, opz_mul_q31_q15(u, opz_mul_q31_q15(ed15, level >> 16)));
         fract32 folded = opz_sine(((uint32_t)opz_mul_q31_q15(u, turn15)) << k);
 
-        /* P1 crossfades the folded layer in over the dry saws. Only the folded layer is DC-blocked: a saw has no DC
-         * of its own, and its -2 wrap step saturates a Q31 blocker (measured: 0.3 mean and full-scale peaks). The
-         * shaper's output is smooth, so the blocker only sees the bias's offset. */
-        fract32 y = opz_add_q31(tri, opz_mul_q31_q15(opz_sub_q31(dc_block(s, folded), tri), w15));
+        /* P1 crossfades the dry triangles against the folded layer. Only the folded layer is DC-blocked: a triangle
+         * has no DC of its own, and its shaped output does. The two layers are weighted separately rather than
+         * lerped: opz_lerp saturates (folded - dry) to full scale first, which clipped the crossfade and meant P1 at
+         * 255 never selected the folded layer alone. */
+        fract32 fdc = dc_block(s, folded);
+        fract32 y = opz_add_q31(opz_mul_q31_q15(tri, 32767 - w15), opz_mul_q31_q15(fdc, w15));
         /* level: velocity, the envelope, and the matched gain, in one multiply */
         /* two Q15 multiplies: amp x level in Q31, then narrowed to a Q15 gain for the sample (a gain needs 15
          * bits; passing the Q31 value straight in as a Q15 coefficient would scale it by 2^16). */
@@ -238,7 +263,7 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
         /* advance: envelope, phases (wrapping is what we want), pitch glide */
         level = opz_env_tick(level, coef, step);
         pa += inc_a; pb += inc_b;
-        inc_a += (uint32_t)pitchSlope; inc_b += (uint32_t)pitchSlope;
+        inc_a += (uint32_t)slope_a; inc_b += (uint32_t)slope_b;
     }
 
     /* 5. The track's level and pan, ADDED into both channels of the interleaved buffer, saturating. */
