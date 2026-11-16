@@ -1,0 +1,18 @@
+# crease: notes across the range, first with the folder crossfaded out (P1 0: the dry three-saw voice) and then
+# folded, gate and release, every voice freed at the end. Scenario format: sim/README.md.
+tempo 120
+steps 16
+tail 1.0
+track lead
+#      P1  P2  A   D   S  R  fx1 fx2 flt res pan lvl porta lfo... note style
+preset  0 128  0  80 200  4  0   0   128 0   128 200 0     128 100 255 0 0
+note 0  C2 2 100
+note 4  C4 2 100
+note 8  C6 2 100
+param p1 200 10
+note 12 A4 2 127
+expect sound   0 2
+expect silence 3.5 4      # release 4 is short: silence before the next note
+expect sound   12 14
+expect idle    18         # the envelope finished, the host freed every voice
+expect peak_below -11.5   # under the -12 dBFS per-voice target, folded or dry (engine-abi.md rule 11)
