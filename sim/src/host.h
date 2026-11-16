@@ -129,6 +129,11 @@ typedef struct Scenario {
     int nsweeps, cap_sweeps;
     SimExpect *expects;
     int nexpects, cap_expects;
+    /* `lfo`: the OS's own block-rate modulation, so the engine can be tested with a moving dial. One destination,
+     * one rate: the device rewrites a single word per block after its 1/64 smoothing, which is what this reproduces. */
+    int lfo_target;        /* OPZ_P_* index, -1 = no LFO (the default) */
+    double lfo_rate_hz;
+    double lfo_depth;      /* 0..1 of the parameter's full range, around the centre */
 } Scenario;
 
 /* Defaults of an empty scenario (tempo 120, 16 steps, 1 s tail, sustain 255, pan 128, level 200, filter 255). */
@@ -187,6 +192,7 @@ typedef struct Track {
     Voice voices[SIM_MAX_VOICES];
     fract32 buf[2 * OPZ_BLOCK_FRAMES];   /* interleaved stereo, like the device (proven on hardware) */
     uint32_t pack;                       /* sample-pack id passed as init's arg2/mem, 0 without a pack */
+    double lfo_phase;                    /* 0..1, the `lfo` directive's oscillator */
     int dropped;                         /* notes dropped because that pack is not loaded */
 } Track;
 

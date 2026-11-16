@@ -126,6 +126,9 @@ void scenario_init(Scenario *sc, int default_fx_track)
     sc->fx_track = default_fx_track;
     sc->gain = SIM_FULL;
     sc->input = IN_SILENCE;
+    sc->lfo_target = -1;            /* no LFO unless a scenario asks for one: memset leaves 0, which is P1 */
+    sc->lfo_rate_hz = 0.0;
+    sc->lfo_depth = 0.0;
     for (int t = 0; t < SIM_TRACKS; t++) {
         sc->init_params[t][OPZ_P_SUSTAIN] = 255;
         sc->init_params[t][OPZ_P_PAN] = 128;
@@ -252,6 +255,23 @@ int scenario_load(Scenario *sc, const char *path, int default_track, int default
             SimEvent *off = new_event(sc);
             off->type = EV_NOTE_OFF; off->time = scenario_step_to_sample(sc, d + d2); off->order = 0;
             off->track = track; off->note = n; off->id = note_id;
+        } else if (!strcmp(cmd, "lfo")) {
+            /* lfo NAME RATE_HZ DEPTH: the OS's block-rate rewrite of one word (P1, P2, filter, resonance, attack,
+             * pan or level -- its own destination list). Smoothing runs first, then this overwrites the word, which
+             * is the order the device uses and the reason a fast LFO can step a dial. */
+            NEED(4);
+            static const char *names[] = {"p1", "p2", "filter", "resonance", "attack", "pan", "level"};
+            static const int index[] = {OPZ_P_P1, OPZ_P_P2, OPZ_P_FILTER, OPZ_P_RESONANCE, OPZ_P_ATTACK, OPZ_P_PAN,
+                                        OPZ_P_LEVEL};
+            int hit = -1;
+            for (unsigned k = 0; k < sizeof names / sizeof names[0]; k++)
+                if (!strcasecmp(argv[1], names[k])) hit = index[k];
+            if (hit < 0) ERR("lfo NAME must be one of p1, p2, filter, resonance, attack, pan, level");
+            if (!parse_num(argv[2], &d) || d < 0.0 || d > 200.0) ERR("lfo RATE_HZ is 0..200");
+            if (!parse_num(argv[3], &d2) || d2 < 0.0 || d2 > 1.0) ERR("lfo DEPTH is 0..1 of the full range");
+            sc->lfo_target = hit;
+            sc->lfo_rate_hz = d;
+            sc->lfo_depth = d2;
         } else if (!strcmp(cmd, "bend")) {
             NEED(3);
             if (track < 0) ERR("no track selected");
