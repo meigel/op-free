@@ -13,6 +13,43 @@ npm --prefix sim/web ci
 npm --prefix sim/web run dev        # http://localhost:5174/?engine=engines/fm2
 ```
 
+### On Linux without root, and without the wasm packages
+
+The three prerequisites are a clang with the `wasm32` target, `wasm-ld`, and a WASI libc — the Makefile's defaults
+assume a Homebrew or `/opt/wasi-sdk` layout. Ubuntu 26.04 ships none of them, and installing them needs root. They can
+be unpacked instead, which is how this was verified:
+
+```bash
+cd ~ && mkdir -p opt/wasi && cd opt/wasi
+for p in lld-19 libllvm19 wasi-libc libclang-rt-21-dev-wasm32; do apt-get download $p; done
+for d in *.deb; do dpkg-deb -x "$d" ~/opt/wasi; done
+
+# compiler-rt ships its wasm builtins under lib/wasi; clang looks for them under lib/wasm32-unknown-wasip1
+mkdir -p ~/opt/wasi/rt21 && cp -r /usr/lib/llvm-21/lib/clang/21/. ~/opt/wasi/rt21/
+cp -r ~/opt/wasi/usr/lib/llvm-21/lib/clang/21/lib/. ~/opt/wasi/rt21/lib/
+cp ~/opt/wasi/rt21/lib/wasi/libclang_rt.builtins-wasm32.a \
+   ~/opt/wasi/rt21/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a
+
+# /usr/bin/clang is a shim that discards -resource-dir: wrap the real driver
+printf '#!/bin/sh\nexec /usr/lib/llvm-21/bin/clang -resource-dir=%s/rt21 "$@"\n' "$HOME/opt/wasi" > ~/opt/wasi/clang-wasm
+chmod +x ~/opt/wasi/clang-wasm
+
+export LD_LIBRARY_PATH=$HOME/opt/wasi/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+make -C sim wasm WASM_CC=$HOME/opt/wasi/clang-wasm \
+     WASM_LD=$HOME/opt/wasi/usr/lib/llvm-19/bin/wasm-ld WASI_SYSROOT=$HOME/opt/wasi/usr
+```
+
+32 modules build. `npm --prefix sim/web ci` then `run dev`, and the page plays from the computer keyboard (A W S E D F …
+from C3) or from an OP-Z over MIDI. The **Start audio** button needs a real click — a scripted `.click()` leaves the
+AudioContext suspended and the meters at −∞ dBFS, which reads like a silent engine.
+
+With root the same thing is three packages, and the Makefile's defaults then work unchanged:
+
+```bash
+sudo apt-get install lld-21 libclang-rt-21-dev-wasm32 wasi-libc
+make -C sim wasm WASI_SYSROOT=/usr
+```
+
 | File | Role |
 |---|---|
 | `catalog.ts` | Vite plugin: `/api/catalog` (engines and templates with plug.json, presets, scenarios, module URL) and `/files/…` (only `engines/`, `sdk/templates/`, `sim/build/wasm/`, `sim/build/samples/`) |
