@@ -395,11 +395,26 @@ function keysSlot(): SlotName {
   return v === "fx1" || v === "fx2" ? v : state.selected;
 }
 
+/** What the page believes it is sounding: the notes it has sent and not yet released. If this line stays empty
+ * while you press keys, the page never got them; if it moves and you hear nothing change, the engine did not act
+ * on them. Two very different bugs that used to look identical. */
+const sounding = new Map<string, number>();
+function showSounding(): void {
+  const el = $("sounding");
+  if (!el) return;
+  el.textContent = sounding.size ? `sounding: ${[...sounding.values()].map(noteName).join(" ")}` : "";
+}
 const keyboard = new Keyboard(
-  (on, note, velocity) => post({ type: "note", slot: keysSlot(), on, note, velocity }),
+  (on, note, velocity) => {
+    post({ type: "note", slot: keysSlot(), on, note, velocity });
+    const k = `${keysSlot()}:${note}`;
+    if (on) sounding.set(k, note); else sounding.delete(k);
+    showSounding();
+  },
   (first, last) => void ($("octave").textContent = `Keys A–' play ${noteName(first)}–${noteName(last)} · Z/X octave`),
 );
 $("keyboard").append(keyboard.el);
+window.setInterval(showSounding, 250);
 
 const instRoot = $("inst-slots");
 const insts = INST_SLOTS.map((name) => {
@@ -682,6 +697,8 @@ function vopzSync(): void {
 async function startAudio(): Promise<void> {
   if (state.ctx) {
     if (state.ctx.state === "suspended") await state.ctx.resume();
+    /* A context that was suspended and has now resumed may still hold voices from before: silence them. */
+    post({ type: "panic" });
     return;
   }
   const ctx = new AudioContext({ sampleRate: 44100, latencyHint: "interactive" });
@@ -902,11 +919,18 @@ $("tempo").addEventListener("change", (e) => post({ type: "tempo", bpm: Number((
 $("volume").addEventListener("input", (e) => {
   if (state.volume) state.volume.gain.value = Number((e.target as HTMLInputElement).value) / 100;
 });
-$("panic").addEventListener("click", () => {
+/** Everything off: the keyboard's own held notes, then every voice in every engine. */
+function panic(): void {
   keyboard.releaseAll();
   keyboard.clearMarks();
   post({ type: "panic" });
-});
+}
+$("panic").addEventListener("click", panic);
+/* A tab that goes to the background stops delivering keyup, and the worklet keeps rendering: a note held at that
+ * moment drones on with no way to release it, and the meters -- driven by requestAnimationFrame -- freeze, so it
+ * looks like nothing is sounding. Silence it on the way out and on the way back, and on every audio (re)start. */
+document.addEventListener("visibilitychange", panic);   /* both ways: leaving may strand a note, returning may resume it */
+window.addEventListener("pagehide", panic);
 $("velocity").addEventListener("input", (e) => (keyboard.velocity = Number((e.target as HTMLInputElement).value)));
 $("keys-target").addEventListener("change", () => keyboard.releaseAll());
 // a first key or click on the keyboard starts audio (browsers need a gesture)
