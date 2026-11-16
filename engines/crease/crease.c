@@ -44,6 +44,14 @@
 #define DC_R 32720
 #define INC_MIN 0x8000        /* about a third of a hertz: below this the phase stalls, above INC_MAX it aliases */
 #define INC_MAX 0x40000000u   /* 11 kHz, the same ceiling the block-start pitch gets */
+/* Both ends of a glide and both detuned copies of them pass through this: 8 cents above 11 kHz still aliases, and a
+ * clamp that only holds the un-detuned pitch lets the wedge through. */
+static int32_t inc_bound(int32_t x)
+{
+    if (x < (int32_t)INC_MIN) return (int32_t)INC_MIN;
+    if (x > (int32_t)INC_MAX) return (int32_t)INC_MAX;
+    return x;
+}
 
 /* One-pole low-pass at 6 kHz in front of the folder: a = 1 - exp(-2 pi 6000 / 44100) in Q15. */
 #define LP_A 16695
@@ -155,10 +163,10 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
     /* 3. Everything that depends only on the knobs and the pitch, once per block. */
     /*    Pitch first: the folder's ceiling depends on it. Clamp to 11 kHz, then the two triangles detune around it.
      *    They glide with the same slope, so a portamento moves them together. */
-    uint32_t inc = pitch;
-    if (inc > INC_MAX) inc = INC_MAX;
-    uint32_t delta = (uint32_t)opz_mul_q31((int32_t)inc, DETUNE);
-    uint32_t inc_a = inc + delta, inc_b = inc - delta;
+    const int32_t raw = (int32_t)pitch;                  /* before the ceiling: the glide's other end needs it */
+    const int32_t inc = inc_bound(raw);
+    const int32_t delta = opz_mul_q31(inc, DETUNE);
+    uint32_t inc_a = (uint32_t)inc_bound(inc + delta), inc_b = (uint32_t)inc_bound(inc - delta);
 
     /*    Folder drive: half a cycle of the shaper at P1 0, four cycles at 255. The shaper's phase is a Q31
      *    multiply (x * m, one turn) shifted left by k turns: m in Q31 holds the fraction, k the octave, so four
@@ -219,13 +227,25 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
      * block without one keeps the two adds it always had. */
     int32_t slope_a = pitchSlope, slope_b = pitchSlope;
     if (pitchSlope) {
-        const int64_t lo = (int64_t)(int32_t)INC_MIN, hi = (int64_t)(int32_t)INC_MAX;
-        const int64_t end_a = (int64_t)(int32_t)inc_a + (int64_t)OPZ_BLOCK_FRAMES * pitchSlope;
-        const int64_t end_b = (int64_t)(int32_t)inc_b + (int64_t)OPZ_BLOCK_FRAMES * pitchSlope;
-        if (end_a < lo)      slope_a = (int32_t)((lo - (int32_t)inc_a) / OPZ_BLOCK_FRAMES);
-        else if (end_a > hi) slope_a = (int32_t)((hi - (int32_t)inc_a) / OPZ_BLOCK_FRAMES);
-        if (end_b < lo)      slope_b = (int32_t)((lo - (int32_t)inc_b) / OPZ_BLOCK_FRAMES);
-        else if (end_b > hi) slope_b = (int32_t)((hi - (int32_t)inc_b) / OPZ_BLOCK_FRAMES);
+        /*    Both ends from the raw pitch, then bounded, detuned and bounded again, and the slope is the line
+         *    between the endpoints. Taking the far end from the already-clamped increment instead makes a pitch that
+         *    is still above the ceiling fall away from it on the first block of a bend -- at MIDI 127 bent down 200
+         *    cents that is 9.6 kHz where the ceiling holds 11 kHz, back up at the next block. A ramp bounded at both
+         *    ends stays between them, so the ceiling holds until the raw pitch itself comes under it. */
+        const int64_t next = (int64_t)raw + (int64_t)OPZ_BLOCK_FRAMES * pitchSlope;
+        const int32_t p1r = next > INT32_MAX ? INT32_MAX : (next < INT32_MIN ? INT32_MIN : (int32_t)next);
+        const int32_t p1 = inc_bound(p1r);
+        const int32_t d1 = opz_mul_q31(p1, DETUNE);
+        const int32_t a1u = p1 + d1, b1u = p1 - d1;              /* unbounded, to detect a binding clamp */
+        const int32_t a1 = inc_bound(a1u), b1 = inc_bound(b1u);
+        /*    Only when something actually binds. Deriving the slope unconditionally would replace pitchSlope with
+         *    its 64-sample truncation on every block, which is a drift nobody asked for: it changed the knobs
+         *    render by the hash and by nothing audible (spectral distance 0.00 dB). */
+        if (p1 != p1r || a1 != a1u || b1 != b1u || (int32_t)inc_a != inc + delta ||
+            (int32_t)inc_b != inc - delta) {
+            slope_a = (a1 - (int32_t)inc_a) / OPZ_BLOCK_FRAMES;
+            slope_b = (b1 - (int32_t)inc_b) / OPZ_BLOCK_FRAMES;
+        }
     }
 
     int32_t level = OPZ_ADSR_LEVEL(env), coef = OPZ_ADSR_COEF(env), step = OPZ_ADSR_STEP(env);

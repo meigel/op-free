@@ -269,6 +269,12 @@ def cases_for(name, is_fx, quick=False, drum=False):
                         group="stress"))
         out.append(case("P1 255, P2 255, glide 147 both directions", params(p1=255, p2=255), CHORD, 4, b,
                         glide=147, glide_flip=2))
+        # The two boundary paths the glide clamp exists for: a note that starts above the 11 kHz ceiling and bends
+        # down through it, and one that climbs into it. Neither is exercised by a glide that stays inside the range.
+        out.append(case("MIDI 127 bent down from above the ceiling", params(p1=255, p2=255), [127], 4,
+                        2 * b if quick else 200, glide=-147))
+        out.append(case("MIDI 119 climbing into the ceiling", params(p1=255, p2=255), [119], 4,
+                        2 * b if quick else 200, glide=147))
         return out + knob_cases(False, b)
     if name == "dx":
         # P1 = 8 x patch + 4 (the middle of the patch's step); sustain 255 so the host envelope holds
