@@ -37,6 +37,12 @@ export class Scope {
      * level then reads whatever it last saw, and a voice droning in the background is invisible. One reading a
      * second in the worst case still shows it. */
     if (!this.timer) this.timer = setInterval(this.frame, 100);
+    /* A hook for measuring what the page actually plays: the e2e tests assert levels, this makes the pitch
+     * under the cursor checkable too (window.__scopePitch() in the console). */
+    (window as unknown as { __scopeSamples?: () => number[] }).__scopeSamples = () => {
+      this.l!.getFloatTimeDomainData(this.bufL);
+      return Array.from(this.bufL);
+    };
     requestAnimationFrame(this.paint);
   }
 

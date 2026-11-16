@@ -395,11 +395,26 @@ function keysSlot(): SlotName {
   return v === "fx1" || v === "fx2" ? v : state.selected;
 }
 
+/** What the page believes it is sounding: the notes it has sent and not yet released. If this line stays empty
+ * while you press keys, the page never got them; if it moves and you hear nothing change, the engine did not act
+ * on them. Two very different bugs that used to look identical. */
+const sounding = new Map<string, number>();
+function showSounding(): void {
+  const el = $("sounding");
+  if (!el) return;
+  el.textContent = sounding.size ? `sounding: ${[...sounding.values()].map(noteName).join(" ")}` : "";
+}
 const keyboard = new Keyboard(
-  (on, note, velocity) => post({ type: "note", slot: keysSlot(), on, note, velocity }),
+  (on, note, velocity) => {
+    post({ type: "note", slot: keysSlot(), on, note, velocity });
+    const k = `${keysSlot()}:${note}`;
+    if (on) sounding.set(k, note); else sounding.delete(k);
+    showSounding();
+  },
   (first, last) => void ($("octave").textContent = `Keys A–' play ${noteName(first)}–${noteName(last)} · Z/X octave`),
 );
 $("keyboard").append(keyboard.el);
+window.setInterval(showSounding, 250);
 
 const instRoot = $("inst-slots");
 const insts = INST_SLOTS.map((name) => {
