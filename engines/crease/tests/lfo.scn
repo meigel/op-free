@@ -1,0 +1,13 @@
+# lfo — the OS's own modulation of the fold, at block rate. The device smooths the dial 1/64 per block and then the
+# LFO overwrites one word, which is the order the `lfo` directive reproduces: this is the page-3 path, tested instead of
+# assumed. Depth 0.85 of the full range at 6 Hz is a slow west-coast breath; the peak check keeps it from clipping.
+tempo 120
+steps 16
+tail 0.5
+track lead
+preset 140 128 0 120 220 20 0 0 128 0 128 255 0 128 100 255 0 0
+lfo p1 6 0.85
+note 0 A3 16 110
+expect sound 0 16
+expect peak_below -3
+expect idle 24
