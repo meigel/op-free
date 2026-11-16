@@ -159,8 +159,12 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
      *    dBFS RMS dry, -18 folded). The crossfade carries the matching gain, so turning fold up changes the tone and
      *    not the level in the mix. */
     fract32 amp = opz_mul_q31_q15(s->amp, (int32_t)(32767 - (w >> 17)));
-    /*    Bias: P2 centred, scaled to +-0.3 (0.6 in Q31). */
-    fract32 bias = opz_mul_q31((fract32)((int32_t)(params[OPZ_P_P2] & OPZ_Q31_ONE) - 0x40000000), 0x4CCCCCCD);
+/*    Bias: P2 centred, scaled to +-0.15. The range is deliberately narrow: the shaper's phase is periodic in the
+     *    bias, so a wider range wraps and the dial repeats itself. Measured at P1 191 (odd/even, dB, P2 0..255):
+     *    +-0.3 gave -7.7 / +13.3 / -18.7 / +12.9 / -7.7 -- the ends sound like the centre-quarter, a dead feel;
+     *    +-0.15 gives +13.2 / +0.5 / -18.7 / +0.6 / +12.9, monotone on each side of the centre detent, 32 dB end
+     *    to end. At P1 255 the same sweep spans 38 dB. */
+    fract32 bias = opz_mul_q31((fract32)((int32_t)(params[OPZ_P_P2] & OPZ_Q31_ONE) - 0x40000000), 0x26666666);
 
     /*    Pitch: clamp to 11 kHz (as super does: the BLEP residual wants room), then the two saws detuned around
      *    it. All three glide with the same slope, so a portamento moves them together. */
