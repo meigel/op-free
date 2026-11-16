@@ -1,6 +1,7 @@
 /*
- * engine.c — load an engine built as a macOS dylib, resolve the five exports, estimate its slot usage.
- * In the wasm build (sim/wasm) the engine is linked into the same module instead; see the __wasm__ branch.
+ * engine.c — load an engine built as a host shared object (macOS dylib or ELF .so), resolve the five exports,
+ * estimate its slot usage. In the wasm build (sim/wasm) the engine is linked into the same module instead; see the
+ * __wasm__ branch.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,6 +108,77 @@ int engine_inspect_size(const char *path, SlotSize *s)
     memset(s, 0, sizeof *s);
     s->not_measured = 1;
     return 0;
+}
+#elif !defined(__APPLE__)
+/* ---- ELF size estimate (Linux and other non-Darwin hosts) ------------------------------------------
+ * The same reading of the linked image that the Mach-O path takes: the sections an engine actually occupies in a
+ * slot, and the names it imports (there is no libc on the device). Host linker overhead (.got, .dynamic, .plt, unwind
+ * tables) is left out, as the Mach-O path leaves out stubs and GOT. */
+#include <elf.h>
+
+static void add_section_elf(SlotSize *s, const char *name, uint32_t type, uint64_t size)
+{
+    if (!strcmp(name, ".init_array")) s->has_constructors = 1;
+    else if (type == SHT_NOBITS) s->bss += size;                        /* .bss, .tbss */
+    else if (!strcmp(name, ".text")) s->code += size;
+    else if (!strncmp(name, ".rodata", 7)) s->rodata += size;
+    else if (!strncmp(name, ".data", 5)) s->data += size;               /* .data, .data.rel.ro */
+    else if (!strcmp(name, ".init_array")) s->has_constructors = 1;
+    /* .got, .dynamic, .plt, .eh_frame, .comment, .symtab: host linker overhead, not counted */
+}
+
+int engine_inspect_size(const char *path, SlotSize *s)
+{
+    memset(s, 0, sizeof *s);
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n < (long)sizeof(Elf64_Ehdr)) { fclose(f); return -1; }
+    uint8_t *p = malloc((size_t)n);
+    if (!p || fread(p, 1, (size_t)n, f) != (size_t)n) {
+        fclose(f);
+        free(p);
+        return -1;
+    }
+    fclose(f);
+
+    const Elf64_Ehdr *eh = (const void *)p;
+    int rc = -1;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) || eh->e_ident[EI_CLASS] != ELFCLASS64 ||
+        eh->e_ident[EI_DATA] != ELFDATA2LSB || eh->e_shentsize != sizeof(Elf64_Shdr) || !eh->e_shnum ||
+        eh->e_shstrndx >= eh->e_shnum ||
+        (size_t)eh->e_shoff + (size_t)eh->e_shnum * sizeof(Elf64_Shdr) > (size_t)n)
+        goto out;
+
+    const Elf64_Shdr *sh = (const void *)(p + eh->e_shoff);
+    const Elf64_Shdr *strsh = &sh[eh->e_shstrndx];
+    if ((size_t)strsh->sh_offset + strsh->sh_size > (size_t)n) goto out;
+    const char *shstr = (const char *)(p + strsh->sh_offset);
+    const Elf64_Shdr *dynsym = NULL;
+
+    for (uint32_t i = 0; i < eh->e_shnum; i++) {
+        const char *name = sh[i].sh_name < strsh->sh_size ? shstr + sh[i].sh_name : "";
+        add_section_elf(s, name, sh[i].sh_type, sh[i].sh_size);
+        if (sh[i].sh_type == SHT_DYNSYM && sh[i].sh_link < eh->e_shnum) dynsym = &sh[i];
+    }
+
+    if (dynsym && dynsym->sh_entsize == sizeof(Elf64_Sym)) {
+        const Elf64_Sym *sym = (const void *)(p + dynsym->sh_offset);
+        const char *str = (const char *)(p + sh[dynsym->sh_link].sh_offset);
+        uint32_t count = (uint32_t)(dynsym->sh_size / sizeof(Elf64_Sym));
+        for (uint32_t k = 0; k < count; k++) {
+            if (sym[k].st_shndx != SHN_UNDEF || ELF64_ST_BIND(sym[k].st_info) == STB_LOCAL) continue;
+            const char *nm = str + sym[k].st_name;
+            size_t used = strlen(s->undefined);
+            snprintf(s->undefined + used, sizeof s->undefined - used, "%s%s", used ? ", " : "", nm);
+        }
+    }
+    rc = 0;
+out:
+    free(p);
+    return rc;
 }
 #else
 /* ---- Mach-O size estimate ---------------------------------------------------------------------------- */

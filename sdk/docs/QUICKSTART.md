@@ -1,7 +1,7 @@
 # Quickstart: your first OP-Z engine
 
 From a fresh clone to a sound in the simulator and a checked `.engine` file, on one page. Everything here runs
-offline on a Mac; nothing talks to an OP-Z until the last section, which sends you to [SAFETY.md](../../SAFETY.md)
+offline on a Mac or a Linux machine; nothing talks to an OP-Z until the last section, which sends you to [SAFETY.md](../../SAFETY.md)
 first.
 
 ```text
@@ -15,7 +15,7 @@ scaffold ──► simulator (sound, golden renders) ──► device build ─�
 
 | For | Install |
 |---|---|
-| Steps 1–3 (simulator) | macOS with the Xcode command-line tools (`xcode-select --install`: `clang`, `make`) and Python 3 |
+| Steps 1–3 (simulator) | macOS with the Xcode command-line tools (`xcode-select --install`: `clang`, `make`) and Python 3, or Linux with `clang`, `make` and Python 3 (`build-essential`; the simulator links `-lm`). The golden renders are the same bytes on both |
 | Playing it in the browser (optional, §3) | LLVM with the wasm32 target, `wasm-ld` and a WASI sysroot (below), Node 23.6 or newer, Chrome or Edge |
 | Steps 4–6 (device build, crash and cycle checks) | the Blackfin cross-compiler and simulator in `~/opt/bfin-elf` (below) |
 | Step 7 with a real OP-Z | `pip install mido python-rtmidi`, and [SAFETY.md](../../SAFETY.md) |

@@ -9,6 +9,10 @@
 
 #include "host.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846   /* C11 has no M_PI; glibc only defines it under _DEFAULT_SOURCE */
+#endif
+
 static void put16(FILE *f, uint16_t v) { fputc(v & 0xff, f); fputc(v >> 8, f); }
 static void put32(FILE *f, uint32_t v) { put16(f, v & 0xffff); put16(f, v >> 16); }
 

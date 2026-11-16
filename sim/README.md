@@ -1,6 +1,7 @@
 # opzsim — OP-Z engine host simulator
 
-`opzsim` runs an engine compiled for macOS with the call pattern the OP-Z uses, so DSP can be developed and
+`opzsim` runs an engine compiled for the host (a macOS dylib or an ELF shared object) with the call pattern the OP-Z
+uses, so DSP can be developed and
 tested before a Blackfin toolchain and hardware runs exist (ROADMAP P1). It is our own model of the host in
 [engine-abi.md](../sdk/docs/engine-abi.md) and [02 — The sound engine host](../research/architecture/02-sound-engine-host.md).
 It contains no TE code, tables or binaries. The same host also runs in the browser (see [Web simulator](#web-simulator)).
