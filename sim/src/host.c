@@ -394,6 +394,22 @@ void host_event(const Scenario *sc, const SimEvent *e, int verbose)
     }
 }
 
+/* Every voice off, whatever its id. A note started twice leaves one voice whose id the per-key table no longer
+ * holds, and no ws_note_off can ever match it: that voice drones and "all notes off" cannot reach it, because the
+ * off-call carries the id of the *last* note-on for that key. This ends them all, then forgets the ids. */
+void host_all_off(void)
+{
+    for (int t = 0; t < SIM_INSTR_TRACKS; t++) {
+        Track *tr = &g_tracks[t];
+        for (int i = 0; i < tr->nvoices; i++) {
+            Voice *v = &tr->voices[i];
+            if (!v->active) continue;
+            if (s_inst && s_inst->onNoteOff) s_inst->onNoteOff(v->note, v->state);
+            sim_env_note_off(&v->env);
+        }
+    }
+}
+
 /* ---- one block --------------------------------------------------------------------------------------- */
 
 /* Smooth the parameters, render every instrument voice and the effect. l and r come in zeroed, or holding the

@@ -341,6 +341,14 @@ class Effect extends Slot {
     this.q(".fx-gain").addEventListener("input", () => this.sendGain());
   }
 
+  /** Back to the normal path: an effect takes another engine's output, not a generator. A generator is not a voice,
+   * so no note-off reaches it -- and once it is in the saved page state it drones again after every reload. */
+  clearInput(): void {
+    this.source.value = "send";
+    this.manualSource = false;
+    this.sendInput();
+  }
+
   sendInput(): void {
     const kind = this.source.value;
     const n = (c: string) => Number(this.q<HTMLInputElement>(c).value);
@@ -958,6 +966,7 @@ async function panicHard(): Promise<void> {
     }, 120);
   }
   for (const fx of effects) {
+    fx.clearInput();                       /* a generator input outlives any note-off; this is what silences it */
     const id = fx.entry?.id;
     if (!id) continue;
     const saved = fx.values.slice();

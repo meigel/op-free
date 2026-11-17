@@ -102,6 +102,14 @@ WS_EXPORT(ws_note_off) void ws_note_off(int track, int note)
     event(EV_NOTE_OFF, track, note & 127, 0, s_note_id[track][note & 127], 0);
 }
 
+/* All sound off, id-independent: the note-off path matches voices by the id the per-key table holds, so a note
+ * started twice strands one voice that no note-off can reach. This one ends every voice. */
+WS_EXPORT(ws_all_off) void ws_all_off(void)
+{
+    host_all_off();
+    memset(s_note_id, 0, sizeof s_note_id);
+}
+
 WS_EXPORT(ws_bend) void ws_bend(int track, int cents) { event(EV_BEND, track, 0, 0, 0, cents); }
 
 /* Set a parameter byte. immediate: load it unsmoothed, as a preset at step 0 is; else smoothed per block. */
