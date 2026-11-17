@@ -75,11 +75,9 @@
 
 static const ModuleCallbackInterface *s_cb;
 
-/* Note-on counter: the seed below must differ per *voice*, not only per note and velocity. Two mono witness
- * tracks started together with the same note would otherwise generate identical noise and sum coherently, which
- * a diagnostic cannot afford. A module-level counter is still deterministic -- both builds see the same
- * sequence of note-ons -- so the bit gate keeps working. */
-static uint32_t s_voice_seq;
+/* (The noise seed is built from note, velocity and the voice's own track -- see onNoteOn. A counter shared by
+ * the whole module would be per-run state: the render would then depend on how many notes came before it in
+ * that process, which the golden tests noticed immediately (identical spectrum, different hash).) */
 
 /* One voice's state, and all of it: 24 bytes of the 280 the ABI allows. */
 typedef struct {
@@ -87,6 +85,7 @@ typedef struct {
     uint32_t seed;    /* opz_noise's LCG state, per voice so two voices do not correlate */
     OpzSvf   svf;     /* the engine's own filter state (flags 0x04) */
     fract32  amp;     /* velocity, latched at note-on */
+    uint32_t track;   /* the track this voice belongs to: part of the noise seed */
     OpzMix   mix;     /* level and pan, ramped per block by opz_mix_mono */
 } State;
 
@@ -120,9 +119,10 @@ uint32_t initModule(uint32_t version, const ModuleCallbackInterface *cb, uint32_
 
 void init(void *state, uint32_t track, uint32_t arg2, void *mem, void *scratch)
 {
-    (void)track; (void)arg2; (void)mem; (void)scratch;
+    (void)arg2; (void)mem; (void)scratch;
     volatile uint8_t *p = (volatile uint8_t *)state;
     for (unsigned i = 0; i < sizeof(State); i++) p[i] = 0;
+    ((State *)state)->track = track;   /* remembered for the seed: two mono tracks on one note must differ */
 }
 
 void onNoteOn(int note, uint8_t velocity, void *state, const uint32_t *params)
@@ -134,7 +134,9 @@ void onNoteOn(int note, uint8_t velocity, void *state, const uint32_t *params)
     s->phase = 0;
     /* A per-note seed: two voices of noise that shared a seed would sum coherently, and a diagnostic that
      * cannot tell correlation from addition is not one. */
-    s->seed = 0x9e3779b9u ^ (++s_voice_seq * 2654435761u) ^ ((uint32_t)note << 16) ^ (uint32_t)velocity;
+    /* Per voice, deterministically: the host passes no voice index, so the track is what separates two voices
+     * playing the same note. Without it their noise streams are identical and sum coherently. */
+    s->seed = 0x9e3779b9u ^ ((uint32_t)note << 16) ^ ((uint32_t)velocity << 8) ^ (s->track * 2654435761u);
     s->svf.ic1 = 0;
     s->svf.ic2 = 0;
     /* A fresh voice's mix gains are zero, and a reused one still holds the previous note's: opz_mix_mono would
@@ -166,7 +168,11 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
     const int32_t oct = (int32_t)((uint32_t)params[OPZ_P_FILTER] >> 23) * FC_OCT_Q16;
     const int32_t fc_q16 = 20 * opz_exp2_q16(oct);                 /* 20 Hz x 2^oct, in Q16 Hz */
     const int32_t q_q16 = Q_BASE_Q16 + (int32_t)((uint32_t)params[OPZ_P_RESONANCE] >> 23) * Q_STEP_Q16;
-    const int32_t k_q30 = (int32_t)(((int64_t)1 << 46) / q_q16);   /* 1/Q in Q30 */
+    /* 1/Q in Q30, computed in 32 bits: k_q15 = 2^31 / q_q16 then shifted. Writing the same thing as
+     * (1 << 46) / q_q16 divides a 64-bit value and pulls ___divdi3 into the image -- 1,206 bytes, a fifth of the
+     * slot window, for one division per block. */
+    const uint32_t k_q15 = 0x80000000u / (uint32_t)q_q16;
+    const int32_t k_q30 = (int32_t)(k_q15 << 15);
     const OpzSvfCoef coef = opz_svf_coef(fc_q16, k_q30);
 
     /*    The host's pitch is an unsigned Q32 increment. Casting it to int32_t first makes every value above
@@ -193,7 +199,7 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
     fract32 mono[N];
     uint32_t ph = s->phase, seed = s->seed;
     OpzSvf svf = s->svf;
-    fract32 lp, bp, hp;
+    fract32 lp, bp;
 
     /* One loop per mode: the branch is taken once per block, not once per sample. A diagnostic that spent a
      * third of its budget on a branch inside the loop would be measuring itself. */
@@ -201,7 +207,7 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
         for (int i = 0; i < N; i++) {
             const fract32 clean = opz_sine(ph);
             const fract32 x = blend_q15(clean, opz_soft(clean), iw15, w15);   /* clean (P2 0) -> drive (255) */
-            opz_svf(&svf, &coef, x, &lp, &bp, &hp);
+            opz_svf(&svf, &coef, x, &lp, 0, 0);          /* only the lowpass: the other outputs are dead code */
             mono[i] = opz_mul_q31_q15(lp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));
             level = opz_env_tick(level, env_coef, step);
             ph += inc;
@@ -212,7 +218,7 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
         for (int i = 0; i < N; i++) {
             const fract32 naive = (fract32)(ph ^ 0x80000000u);           /* the ramp without its residual */
             const fract32 x = blend_q15(opz_saw_blep(ph, inc, recip), naive, iw15, w15);
-            opz_svf(&svf, &coef, x, &lp, &bp, &hp);
+            opz_svf(&svf, &coef, x, &lp, 0, 0);          /* only the lowpass: the other outputs are dead code */
             mono[i] = opz_mul_q31_q15(lp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));
             level = opz_env_tick(level, env_coef, step);
             ph += inc;
@@ -224,7 +230,7 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
             const fract32 n = opz_noise(&seed);
             const fract32 sw = opz_saw_blep(ph, inc, recip);
             const fract32 x = blend_q15(sw, n, iw15, w15);   /* flat excitation for the resonant peak */
-            opz_svf(&svf, &coef, x, &lp, &bp, &hp);
+            opz_svf(&svf, &coef, x, 0, &bp, 0);          /* only the bandpass, for the resonant peak */
             mono[i] = opz_mul_q31_q15(bp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));       /* the peak, not the passband: measurable anywhere */
             level = opz_env_tick(level, env_coef, step);
             ph += inc;
