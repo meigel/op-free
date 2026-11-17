@@ -1,9 +1,9 @@
 {
   "engine": "witness",
-  "memoryslot": 9,
+  "memoryslot": 74,
   "engine_version": 1,
   "plug": {
-    "id": 60907,
+    "id": 61204,
     "version": 1,
     "name": "witness",
     "trackmask": 240,
