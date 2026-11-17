@@ -108,7 +108,7 @@ take no row in this table.
 | 76 | free again: `hats` v1–v2 (4.9 KB) were linked here. A unit that installed them keeps nothing here once v3 replaces the definition | — | free |
 | 32 | `hats` v3 (5.6 KB: D-04 metallic hats and cymbals, 336 B `.bss`; moved from 5 KB slot 76 on 2026-11-11 when level and pan and the envelope page together took it 648 B past 5,120) — engine batch 4 | 61023 | built |
 | 75 | `8bit` (4.8 KB since v3: D-05 chip drums; no voice pool, 88 B of state) — engine batch 4 | 61024 | built |
-| 74 | free again: `snap` v1–v2 (5,016 of 5,120 B) were linked here; never installed on the user's OP-Z. A unit that installed v1/v2 keeps nothing here once v3 replaces the definition | — | free |
+| 74 | `witness` (conformance instrument, 5,020 of 5,120 B: three modes over the shared kernels, own SVF via flags 0x04; [conformance.md](conformance.md)). Was `snap` v1–v2's slot (5,016 of 5,120 B), never installed on the user's OP-Z | 61204 | built |
 | 33 | `snap` v3 (5.4 KB: D-06 claps, rims, shakers; moved from 5 KB slot 74 on 2026-11-11 when the track's level and pan, `opz_mix.h`, took it 304 B past 5,120) — engine batch 4 | 61025 | built |
 | 73 | `opz_test_tempo` (hardware check H-7, Q-18 sequencer keys; 1.4 KB) | 60903 | built |
 | 72 | `opz_test_sampler` (hardware check H-S2, Q-27 samples: plays `getSample`'s slices; 1.0 KB; its plug names `samplepacks/opzk_testkit.aif`) | 60905 | built |
