@@ -75,6 +75,12 @@
 
 static const ModuleCallbackInterface *s_cb;
 
+/* Note-on counter: the seed below must differ per *voice*, not only per note and velocity. Two mono witness
+ * tracks started together with the same note would otherwise generate identical noise and sum coherently, which
+ * a diagnostic cannot afford. A module-level counter is still deterministic -- both builds see the same
+ * sequence of note-ons -- so the bit gate keeps working. */
+static uint32_t s_voice_seq;
+
 /* One voice's state, and all of it: 24 bytes of the 280 the ABI allows. */
 typedef struct {
     uint32_t phase;   /* Q32 phase, wraps */
@@ -85,6 +91,15 @@ typedef struct {
 } State;
 
 _Static_assert(sizeof(State) <= OPZ_VOICE_STATE_BYTES, "witness state fits the device's voice record");
+
+/* A crossfade as two weighted multiplies. opz_lerp(a, b, w) computes a + w*(b - a), and that difference
+ * saturates when a and b are far apart -- at full depth a saw of -0.75 against noise of +0.75 lands at +0.25
+ * instead of +0.75, so the endpoint of the blend is not the signal it claims to be. Two Q15 weights cost one
+ * extra multiply and are exact. */
+static fract32 blend_q15(fract32 a, fract32 b, int32_t wa, int32_t wb)
+{
+    return opz_add_q31(opz_mul_q31_q15(a, wa), opz_mul_q31_q15(b, wb));
+}
 
 static int32_t inc_bound(int32_t x)
 {
@@ -119,9 +134,13 @@ void onNoteOn(int note, uint8_t velocity, void *state, const uint32_t *params)
     s->phase = 0;
     /* A per-note seed: two voices of noise that shared a seed would sum coherently, and a diagnostic that
      * cannot tell correlation from addition is not one. */
-    s->seed = 0x9e3779b9u ^ ((uint32_t)note * 2654435761u) ^ ((uint32_t)velocity << 8);
+    s->seed = 0x9e3779b9u ^ (++s_voice_seq * 2654435761u) ^ ((uint32_t)note << 16) ^ (uint32_t)velocity;
     s->svf.ic1 = 0;
     s->svf.ic2 = 0;
+    /* A fresh voice's mix gains are zero, and a reused one still holds the previous note's: opz_mix_mono would
+     * ramp from either, so the first block of every note would swell from silence or slide from the last note's
+     * pan. Start them at what the dials say. */
+    opz_mix_start(&s->mix, params);
 }
 
 void onNoteOff(int note, void *state)
@@ -150,15 +169,23 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
     const int32_t k_q30 = (int32_t)(((int64_t)1 << 46) / q_q16);   /* 1/Q in Q30 */
     const OpzSvfCoef coef = opz_svf_coef(fc_q16, k_q30);
 
-    uint32_t inc = (uint32_t)inc_bound((int32_t)pitch);
-    const uint32_t recip = opz_blep_recip(inc);
+    /*    The host's pitch is an unsigned Q32 increment. Casting it to int32_t first makes every value above
+     *    2^31 negative, which inc_bound then clamps to INC_MIN -- a note near the ceiling would arrive as a
+     *    sub-audio drone instead of at 11 kHz. Clamp the unsigned value. */
+    uint32_t inc = pitch > INC_MAX ? INC_MAX : (pitch < INC_MIN ? (uint32_t)INC_MIN : pitch);
+    uint32_t recip = opz_blep_recip(inc);
+    /*    And the reciprocal must follow the increment: opz_saw_blep's residual is computed against 1/dt of the
+     *    increment passed with it, so a glide that leaves the reciprocal at the block's first value applies a
+     *    correction of the wrong width for every sample after it. Recomputing it costs a normalise and a
+     *    reciprocal, so it happens only while the pitch is actually moving. */
+    const int gliding = pitchSlope != 0;
     /* Mode 1 blends the band-limited saw against the naive one, which is the only honest way to take a
      * correction away: scaling `recip` is not "less correction" -- at zero the residual becomes a full-scale
      * step once per cycle, which is worse than either end and not monotone in any metric (measured). The dial
      * therefore runs from opz_saw_blep to the raw phase ramp, and the metric it exposes is the inharmonic
      * energy, i.e. exactly what the kernel exists to suppress. Measure it at C6, where a naive saw folds the
      * most. */
-    const fract32 blep_mix = opz_sub_q31(OPZ_Q31_ONE, w);   /* 1 at P2 0: full correction */
+    const int32_t w15 = (int32_t)(w >> 16), iw15 = 32767 - w15;   /* depth, and its complement, in Q15 */
 
     int32_t level = OPZ_ADSR_LEVEL(env), env_coef = OPZ_ADSR_COEF(env), step = OPZ_ADSR_STEP(env);
     const fract32 amp = s->amp;   /* velocity and the peak law; the envelope is applied per sample below */
@@ -172,31 +199,37 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
      * third of its budget on a branch inside the loop would be measuring itself. */
     if (mode == 0) {
         for (int i = 0; i < N; i++) {
-            fract32 x = opz_sine(ph);
-            x = opz_lerp(x, opz_soft(x), w);          /* clean sine -> odd-harmonic drive */
+            const fract32 clean = opz_sine(ph);
+            const fract32 x = blend_q15(clean, opz_soft(clean), iw15, w15);   /* clean (P2 0) -> drive (255) */
             opz_svf(&svf, &coef, x, &lp, &bp, &hp);
             mono[i] = opz_mul_q31_q15(lp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));
             level = opz_env_tick(level, env_coef, step);
-            ph += inc; inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
+            ph += inc;
+            inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
+            if (gliding) recip = opz_blep_recip(inc);   /* the next sample's residual needs its own 1/dt */
         }
     } else if (mode == 1) {
         for (int i = 0; i < N; i++) {
             const fract32 naive = (fract32)(ph ^ 0x80000000u);           /* the ramp without its residual */
-            fract32 x = opz_lerp(naive, opz_saw_blep(ph, inc, recip), blep_mix);
+            const fract32 x = blend_q15(opz_saw_blep(ph, inc, recip), naive, iw15, w15);
             opz_svf(&svf, &coef, x, &lp, &bp, &hp);
             mono[i] = opz_mul_q31_q15(lp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));
             level = opz_env_tick(level, env_coef, step);
-            ph += inc; inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
+            ph += inc;
+            inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
+            if (gliding) recip = opz_blep_recip(inc);   /* the next sample's residual needs its own 1/dt */
         }
     } else {
         for (int i = 0; i < N; i++) {
             const fract32 n = opz_noise(&seed);
             const fract32 sw = opz_saw_blep(ph, inc, recip);
-            const fract32 x = opz_lerp(sw, n, w);     /* flat excitation for the resonant peak */
+            const fract32 x = blend_q15(sw, n, iw15, w15);   /* flat excitation for the resonant peak */
             opz_svf(&svf, &coef, x, &lp, &bp, &hp);
             mono[i] = opz_mul_q31_q15(bp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));       /* the peak, not the passband: measurable anywhere */
             level = opz_env_tick(level, env_coef, step);
-            ph += inc; inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
+            ph += inc;
+            inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
+            if (gliding) recip = opz_blep_recip(inc);   /* the next sample's residual needs its own 1/dt */
         }
     }
 

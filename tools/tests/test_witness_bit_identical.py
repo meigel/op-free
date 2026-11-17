@@ -68,14 +68,24 @@ class WitnessHostMatchesDevice(unittest.TestCase):
                            + ["-I", inc, os.path.join(TOOLS, "cycles", "crt0.S"), SRC,
                               "-nostdlib", "-nostartfiles", "-T", ld, "-o", elf, "-lgcc"],
                            check=True, capture_output=True)
-            got = subprocess.run([opz_cycles.tool(TOOLCHAIN, "run"),
+            run = subprocess.run([opz_cycles.tool(TOOLCHAIN, "run"),
                                   "--memory-region", "0x80000000,0x100000", elf],
-                                 capture_output=True, text=True, timeout=300).stdout
+                                 capture_output=True, text=True, timeout=300)
+            got = run.stdout
+        # The digest lines are printed before bench_exit, so matching output alone does not prove the run
+        # finished: a crash during shutdown would still leave it. The exit status is part of the evidence.
+        self.assertEqual(run.returncode, 0, "bfin-elf-run exited %d: %r" % (run.returncode, run.stderr[-300:]))
 
         self.assertTrue(want.splitlines() and want.splitlines()[-1].startswith("done"),
                         "host run: %r" % want[-200:])
         host_lines, dev_lines = want.splitlines(), got.splitlines()
-        self.assertEqual(len(host_lines), 3 * 4 + 1, "expected 3 modes x 4 depths + done")
+
+        # The harness prints its own case count so this test never encodes "3 modes x 4 depths": adding a mode
+        # is an edit to witness_sig.c alone, and a stale expectation here cannot silently shrink the coverage.
+        cases = [l for l in host_lines if l.startswith("cases ")]
+        self.assertEqual(len(cases), 1, "the harness must print one 'cases N' line")
+        n = int(cases[0].split()[1])
+        self.assertEqual(len(host_lines), n + 2, "expected %d cases + 'cases' + 'done'" % n)
 
         # Report the first differing case by name: the point of the gate is localisation, not a boolean.
         for h, d in zip(host_lines, dev_lines):
