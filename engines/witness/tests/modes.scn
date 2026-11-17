@@ -1,24 +1,35 @@
-# witness: the three modes in order, each held long enough to measure, then a release and the voice freed.
-# The point is not that it sounds good; it is that each mode's kernel is the only thing in the path.
+# witness: each mode at both ends of its own depth dial, one note each, then a full-velocity note to check the
+# per-voice ceiling. The point is not that it sounds good; it is that one kernel is the only thing in the path.
 tempo 120
-steps 16
+steps 24
 tail 1.0
 track lead
 #      P1  P2  A   D   S   R  fx1 fx2 flt res pan lvl porta lfo-d lfo-s tgt shp style
-preset  0 128  0  70 200  20  0   0  255  0  128 200  0   128  100 255  0   0
-note 0  C3 2 100        # sine, clean
-param p1 40 4
-note 4  C3 2 100        # sine, driven
+preset  0   0  0  70 200  20  0   0  255  0  128 200  0   128  100 255  0  128
+note 0  C3 2 100        # sine, depth 0: the clean reference
+param p2 255 4
+note 4  C3 2 100        # sine, depth 255: soft drive, harmonics
 param p1 128 8
-note 8  C3 2 100        # saw, clipped
-param p1 240 12
-param p2 200 12
-param filter 96 12
-param resonance 160 12
-note 12 C3 2 100        # noise through a resonant band-pass
-expect sound   0 1.8
-expect sound   4 5.8
-expect sound   8 9.8
-expect sound   12 13.8
-expect idle    18         # the envelope finished, the host freed every voice
-expect peak_below -11.5   # under the -12 dBFS per-voice target in every mode
+param p2 0   8
+note 8  C3 2 100        # saw, depth 0: band-limited
+param p2 255 12
+note 12 C3 2 100        # saw, depth 255: the correction removed, aliasing
+param p1 240 16
+param p2 200 16
+param filter 96 16
+param resonance 40 16    # inside the filter's linear region: above it the SVF saturates (README)
+note 16 C6 2 100        # noise through the resonant peak, high enough for the peak to sit in band
+param p1 0   20
+param p2 0   20
+param filter 255 20
+param resonance 0 20
+param level 255 20
+note 20 C3 2 127        # full velocity, full level: the -12 dBFS per-voice ceiling
+expect sound 0 1.8
+expect sound 4 5.8
+expect sound 8 9.8
+expect sound 12 13.8
+expect sound 16 17.8
+expect sound 20 21.8
+expect idle 26           # the envelope finished, the host freed every voice
+expect peak_below -12    # OPZ_VOICE_PEAK: -12 dBFS per voice, at velocity 127 and level 255

@@ -1,12 +1,14 @@
 [
-  { "slot": 0, "index": 0, "default_octave": 0, "name": "sine clean",
-    "values": [0, 0, 0, 60, 200, 20, 0, 0, 255, 0, 128, 200, 0, 128, 100, 255, 0, 0] },
-  { "slot": 0, "index": 1, "default_octave": 0, "name": "sine driven",
-    "values": [40, 200, 0, 60, 200, 20, 0, 0, 255, 0, 128, 200, 0, 128, 100, 255, 0, 0] },
-  { "slot": 0, "index": 2, "default_octave": 0, "name": "saw clipped",
-    "values": [128, 180, 0, 60, 200, 20, 0, 0, 255, 0, 128, 200, 0, 128, 100, 255, 0, 0] },
-  { "slot": 0, "index": 3, "default_octave": 0, "name": "resonant noise",
-    "values": [240, 180, 0, 60, 200, 40, 0, 0, 96, 160, 128, 180, 0, 128, 100, 255, 0, 0] },
-  { "slot": 0, "index": 4, "default_octave": 0, "name": "peak sweep",
-    "values": [200, 120, 5, 70, 210, 30, 0, 0, 140, 100, 128, 190, 0, 128, 100, 255, 0, 0] }
+  { "slot": 0, "index": 0, "default_octave": -2, "name": "sine clean",
+    "values": [0, 0, 0, 60, 200, 20, 0, 0, 255, 0, 128, 200, 0, 128, 100, 255, 0, 128] },
+  { "slot": 0, "index": 1, "default_octave": -2, "name": "sine driven",
+    "values": [40, 255, 0, 60, 200, 20, 0, 0, 255, 0, 128, 200, 0, 128, 100, 255, 0, 128] },
+  { "slot": 1, "index": 0, "default_octave": 0, "name": "saw band-limited",
+    "values": [128, 0, 0, 60, 200, 20, 0, 0, 255, 0, 128, 200, 0, 128, 100, 255, 0, 128] },
+  { "slot": 1, "index": 1, "default_octave": 0, "name": "saw naive",
+    "values": [128, 255, 0, 60, 200, 20, 0, 0, 255, 0, 128, 200, 0, 128, 100, 255, 0, 128] },
+  { "slot": 2, "index": 0, "default_octave": 0, "name": "noise peak",
+    "values": [240, 200, 0, 60, 200, 30, 0, 0, 96, 40, 128, 190, 0, 128, 100, 255, 0, 128] },
+  { "slot": 3, "index": 0, "default_octave": -1, "name": "noise flat",
+    "values": [240, 255, 5, 70, 210, 30, 0, 0, 200, 20, 128, 190, 0, 128, 100, 255, 0, 128] }
 ]
