@@ -1,0 +1,17 @@
+{
+  "engine": "witness",
+  "memoryslot": 9,
+  "engine_version": 1,
+  "plug": {
+    "id": 60907,
+    "version": 1,
+    "name": "witness",
+    "trackmask": 240,
+    "flags": 4,
+    "parameter_names": [
+      "mode",
+      "depth"
+    ]
+  },
+  "presets": "presets.json"
+}
