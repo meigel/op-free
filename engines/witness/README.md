@@ -59,15 +59,15 @@ Measured on the device model (`tools/opz_cycles.py engines/witness --quick`), an
 
 ```
 mode        cycles/sample/voice   max (knobs moving)
-sine        210.4                 213.3
-saw         191.7                 195.2
-noise       196.6                 200.0
+sine        210.8                 211.0
+saw         170.3                 172.2
+noise       182.3                 184.1
 ```
 
 That is honest rather than accidental: the state-variable filter runs on every sample, in every mode, because
 `flags 0x04` handed it to the engine and a diagnostic wants one disposition. Against the pool it is affordable
 at one voice (405 available in the drums-1-voice layout) and at two (200–268), and not beyond. If you need it
-polyphonic, that is the knob to measure, not to assume. Render stack: 464 bytes, 24 bytes of voice state.
+polyphonic, that is the knob to measure, not to assume. Render stack: 412 bytes, 28 bytes of voice state (the track, for the noise seed).
 
 ## The gate it exists for
 
@@ -85,8 +85,9 @@ localises a kernel whose two builds disagree, which is a platform bug the simula
 That is what confines the known `test_opz_cycles` divergence (`opz_mul_q31`, `opz_mul_q31_q15`, `opz_svf`) to the
 edge inputs that check folds in.
 
-Slot 74, plug id 61204, device image **5,020 of 5,120 B (98 %)** — the next mode must share the per-mode loop
-bodies rather than add a fourth copy.
+Slot 74, plug id 61204, device image **4,060 of 5,120 B (79 %)**. It was 5,544 before the review: the 64-bit divide
+that computed the filter's reciprocal pulled `___divdi3` into the image — 1,206 bytes, a fifth of the window, for
+one division per block. Done in 32 bits it is gone, and the image came down by 1.5 KB.
 
 Full detail, including how to add a mode: [`sdk/docs/conformance.md`](../../sdk/docs/conformance.md). See also
 `sdk/docs/engine-abi.md`, `sdk/docs/parameter-scheme.md` and `research/crash-safety.md`.

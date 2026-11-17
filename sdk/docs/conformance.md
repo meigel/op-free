@@ -43,15 +43,20 @@ disposition: if the cost and the transfer function changed with the knob, the me
 
 ```
 mode     cycles/sample/voice   max (knobs moving)
-sine     210.4                 213.3
-saw      191.7                 195.2
-noise    196.6                 200.0
+sine     210.8                 211.0
+saw      170.3                 172.2
+noise    182.3                 184.1
 ```
 
 Over the 167 line on purpose, and affordable because the budget is one shared pool, not a per-voice wall
 ([cpu-headroom.md](../../research/cpu-headroom.md) §1): a mono instrument has 405 at one voice. Render stack
-464 B, voice state 24 B of the 280 allowed, device image 5,020 of 5,120 B — 98 % of slot 74, so the next mode
-must first share the per-mode loop bodies rather than add a fourth copy.
+412 B, voice state 28 B of the 280 allowed, device image 4,060 of 5,120 B — 79 % of slot 74, with room for a fourth
+mode.
+
+The image is worth a note because it nearly cost the slot: the filter's reciprocal was written as a 64-bit divide,
+which pulls `___divdi3` into the image — 1,206 bytes, a fifth of a 5 KB window, for one division per block. The
+same value in 32 bits (`0x80000000u / q_q16`, then shifted) removes it and the image by 1.5 KB. Check
+`bfin-elf-nm --size-sort` before adding a mode: the library helpers are bigger than the DSP.
 
 ## The gate
 
