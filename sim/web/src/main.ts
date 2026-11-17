@@ -341,6 +341,14 @@ class Effect extends Slot {
     this.q(".fx-gain").addEventListener("input", () => this.sendGain());
   }
 
+  /** Back to the normal path: an effect takes another engine's output, not a generator. A generator is not a voice,
+   * so no note-off reaches it -- and once it is in the saved page state it drones again after every reload. */
+  clearInput(): void {
+    this.source.value = "send";
+    this.manualSource = false;
+    this.sendInput();
+  }
+
   sendInput(): void {
     const kind = this.source.value;
     const n = (c: string) => Number(this.q<HTMLInputElement>(c).value);
@@ -936,7 +944,37 @@ function panic(): void {
   keyboard.clearMarks();
   post({ type: "panic" });
 }
-$("panic").addEventListener("click", panic);
+/** The button, as opposed to the lifecycle guard: silence the graph and reset the FX engines.
+ *
+ * "All notes off" is not silence. A note-off reaches the voices; nothing in the ABI reaches the inside of an FX
+ * engine, and a delay or a reverb carries its own state -- a feedback tail outlives every note-off there is. So the
+ * master is ducked to zero for 120 ms (a stuck voice cannot outlast that either) and the two FX slots are reloaded,
+ * which is the only operation that zeroes them. Their dials are put back afterwards. If sound survives this, it is
+ * not coming from this page, and saying so is worth more than another guess. */
+async function panicHard(): Promise<void> {
+  panic();
+  const c = state.ctx, g = state.volume;
+  if (g && c) {
+    const v = g.gain.value;
+    g.gain.cancelScheduledValues(c.currentTime);
+    g.gain.setValueAtTime(0, c.currentTime);
+    window.setTimeout(() => {
+      if (!state.volume) return;
+      const t = c.currentTime;
+      g.gain.cancelScheduledValues(t);
+      g.gain.setValueAtTime(v, t);
+    }, 120);
+  }
+  for (const fx of effects) {
+    fx.clearInput();                       /* a generator input outlives any note-off; this is what silences it */
+    const id = fx.entry?.id;
+    if (!id) continue;
+    const saved = fx.values.slice();
+    await fx.select(id);
+    fx.setValues(saved, true);
+  }
+}
+$("panic").addEventListener("click", () => void panicHard());
 /* A tab that goes to the background stops delivering keyup, and the worklet keeps rendering: a note held at that
  * moment drones on with no way to release it, and the meters -- driven by requestAnimationFrame -- freeze, so it
  * looks like nothing is sounding. Silence it on the way out and on the way back, and on every audio (re)start. */

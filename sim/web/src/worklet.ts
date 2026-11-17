@@ -148,14 +148,22 @@ class SimProcessor extends AudioWorkletProcessor {
         for (const e of this.engines()) e.transport(m.play);
         break;
       case "panic":
-        for (const e of this.engines()) for (let n = 0; n < 128; n++) e.noteOff(n);
+        /* One engine per try: a trapped instance throws from inside the loop, and an unguarded loop would then
+         * leave every engine after it still sounding. Modules from an older build only have the note-off flood. */
+        for (const e of this.engines()) {
+          try {
+            if (!e.allOff()) for (let n = 0; n < 128; n++) e.noteOff(n);
+          } catch (err) {
+            console.error("panic: an engine threw, the rest still get theirs", err);
+          }
+        }
         break;
     }
   }
 
   private engines(): LiveEngine[] {
     return [...INST_SLOTS.map((s) => this.inst[s].engine), this.fx.fx1.engine, this.fx.fx2.engine]
-      .filter((e): e is LiveEngine => !!e);
+      .filter((e): e is LiveEngine => !!e && e.ok);
   }
 
   /** Target gains of one track's send/return paths (src/mixer.ts); an effect not fed by the tracks takes no send. */

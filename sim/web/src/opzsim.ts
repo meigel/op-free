@@ -33,6 +33,8 @@ interface Exports {
   ws_transport(play: number): void;
   ws_note_on(track: number, note: number, velocity: number): void;
   ws_note_off(track: number, note: number): void;
+  /** Present from the build that added it: ends every voice whatever its id. */
+  ws_all_off?(): void;
   ws_bend(track: number, cents: number): void;
   ws_param(track: number, index: number, byte: number, immediate: number): void;
   ws_render(): number;
@@ -181,6 +183,14 @@ export class LiveEngine {
 
   noteOff(note: number, track = this.track): void {
     this.ex.ws_note_off(track, note);
+  }
+
+  /** Every voice off, id-independent. noteOff matches by the id of the *last* note-on for that key, so a note
+   * started twice strands one voice that no note-off can reach. Silence has to be reachable another way. */
+  allOff(): boolean {
+    if (!this.ex.ws_all_off) return false;
+    this.ex.ws_all_off();
+    return true;
   }
 
   /** immediate: load unsmoothed (a preset), else smoothed 1/64 per block like a knob. */

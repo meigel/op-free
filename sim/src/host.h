@@ -214,6 +214,7 @@ extern HostStats g_host;
 
 double now_ns(void);
 /* Tracks, voices (on the scenario's used instrument tracks), sample packs, the effect's mem and init. 0 ok. */
+void host_all_off(void);
 int host_setup(Engine *inst, Engine *fx, const Scenario *sc, int generous, int check_add);
 void host_event(const Scenario *sc, const SimEvent *e, int verbose);
 void host_set_param(int track, int index, int byte);
