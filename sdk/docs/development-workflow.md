@@ -65,6 +65,8 @@ behave. Keep a reference render.
 - no NaN-equivalents: DC offset, clipping count, silence where sound is expected;
 - worst-case parameter sweeps (all knobs 0 and 255, fast LFO on P1/P2).
 
+The simulator renders what the *host* computes, and the host is not the device. The one check that compares the two is the witness bit gate ([conformance.md](conformance.md)).
+
 ## 5. Build
 
 ```bash
@@ -116,5 +118,7 @@ arm64 but 3.9 KB of Blackfin code at `-O2`, plus ~1.2 KB for `libgcc`'s `___divd
 - [ ] Golden tests pass in `opzsim`
 - [ ] Installed, played, removed and reinstalled on hardware without errors
 - [ ] CPU cost measured and documented
+- [ ] If the engine runs shared kernels, `python3 -m unittest tools.tests.test_witness_bit_identical -v`
+      still matches the device bit for bit ([conformance.md](conformance.md)); extend the gate's mode list
 - [ ] Presets and manual written
 - [ ] Licence of all ported code is MIT/BSD/public domain and credited

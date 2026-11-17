@@ -71,10 +71,22 @@ polyphonic, that is the knob to measure, not to assume. Render stack: 464 bytes,
 
 ## The gate it exists for
 
-`tools/witness/witness_sig.c` renders all three modes deterministically and prints one FNV-1a digest per mode.
-It is built twice — once with `cc` for the host, once with `bfin-elf-gcc` and run under `bfin-elf-run` for the
-device — and `tools/tests/test_witness_bit_identical.py` requires the two digests to be equal. A difference is
-not a voice defect: it localises a kernel whose host build and device build disagree, which is a platform bug
-that the simulator would otherwise hide.
+```bash
+python3 -m unittest tools.tests.test_witness_bit_identical -v
+```
 
-See also `sdk/docs/engine-abi.md`, `docs/parameter-scheme.md` and `research/crash-safety.md`.
+`tools/witness/witness_sig.c` compiles this engine in, renders every `(mode, depth)` deterministically and prints
+one FNV-1a digest per case. The test builds it twice — `cc` for the host, `bfin-elf-gcc` run in `bfin-elf-run`
+for the device — and requires the outputs to match line for line. A difference is not a voice defect: it
+localises a kernel whose two builds disagree, which is a platform bug the simulator would otherwise hide.
+
+**Currently: all twelve cases are bit-identical**, across `opz_sine`, `opz_saw_blep`, `opz_noise`, `opz_soft`,
+`opz_lerp`, `opz_blep_recip`, `opz_exp2_q16`, `opz_svf_coef`, `opz_svf` and the `opz_mix_mono` Blackfin loops.
+That is what confines the known `test_opz_cycles` divergence (`opz_mul_q31`, `opz_mul_q31_q15`, `opz_svf`) to the
+edge inputs that check folds in.
+
+Slot 74, plug id 61204, device image **5,020 of 5,120 B (98 %)** — the next mode must share the per-mode loop
+bodies rather than add a fourth copy.
+
+Full detail, including how to add a mode: [`sdk/docs/conformance.md`](../../sdk/docs/conformance.md). See also
+`sdk/docs/engine-abi.md`, `sdk/docs/parameter-scheme.md` and `research/crash-safety.md`.

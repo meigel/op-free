@@ -48,12 +48,23 @@ function enginesRoot(): string {
   return has ? synced : join(LAB, "engines");
 }
 
-/** Where each module file comes from: a published URL path ("modules/x.wasm") -> a file on disk. */
+/** Where each module file comes from: a published URL path ("modules/x.wasm") -> a file on disk.
+ *
+ * Three places, in this order: the synced release modules under public/, this checkout's own builds (the OP-FREE
+ * tree the site lives in: `make -C sim wasm`, `tools/opz_build.py`), and finally the lab checkout beside it. The
+ * middle one is what an engine added to this tree needs — without it the catalogue lists the engine, gives it a
+ * card and presets, and then has no module to play, because `public/modules` only holds what
+ * `tools/opfree_sync.py` last copied.
+ */
 function moduleSources(dir: string): { wasm: string | null; engine: string | null } {
   const pick = (...paths: string[]) => paths.find((p) => existsSync(p)) ?? null;
   return {
-    wasm: pick(join(PUBLIC_MODULES, `${dir}.wasm`), join(LAB, "sim", "build", "wasm", "engines", `${dir}.wasm`)),
-    engine: pick(join(PUBLIC_MODULES, `${dir}.engine`), join(LAB, "build", "bfin", dir, `${dir}.engine`)),
+    wasm: pick(join(PUBLIC_MODULES, `${dir}.wasm`),
+               join(OPFREE, "sim", "build", "wasm", "engines", `${dir}.wasm`),
+               join(LAB, "sim", "build", "wasm", "engines", `${dir}.wasm`)),
+    engine: pick(join(PUBLIC_MODULES, `${dir}.engine`),
+                 join(OPFREE, "build", "bfin", dir, `${dir}.engine`),
+                 join(LAB, "build", "bfin", dir, `${dir}.engine`)),
   };
 }
 
