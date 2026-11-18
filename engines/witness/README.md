@@ -71,17 +71,19 @@ Play it **mono**. The cycle budget is a shared pool, not a per-voice wall (`rese
 cycles/sample/voice is only the worst case at 19 voices; a synth alone on its tracks may spend most of the timed
 stage).
 
-Measured on the device model (`tools/opz_cycles.py engines/witness --quick`), and it is **over the 167 line**:
+Measured on the device model (`tools/opz_cycles.py engines/witness --quick`). The saw mode now sits **under** the
+167 line and the sine and noise modes above it:
 
 ```
 mode        cycles/sample/voice   max (knobs moving)
-sine        210.8                 211.0
-saw         170.3                 172.2
-noise       182.3                 184.1
+sine        204.0                 204.2
+saw         161.5                 163.4
+noise       173.3                 175.2
 ```
 
-That is honest rather than accidental: the state-variable filter runs on every sample, in every mode, because
-`flags 0x04` handed it to the engine and a diagnostic wants one disposition. Against the pool it is affordable
+The spread is the oscillator, not the filter: `opz_saw_blep` is the cheapest of the three kernels and `opz_sine`
+the dearest, while the state-variable filter runs on every sample, in every mode, because `flags 0x04` handed it
+to the engine and a diagnostic wants one disposition. Against the pool it is affordable
 at one voice (405 available in the drums-1-voice layout) and at two (200–268), and not beyond. If you need it
 polyphonic, that is the knob to measure, not to assume. Render stack: 412 bytes, 28 bytes of voice state (the track, for the noise seed).
 
@@ -96,12 +98,31 @@ one FNV-1a digest per case. The test builds it twice — `cc` for the host, `bfi
 for the device — and requires the outputs to match line for line. A difference is not a voice defect: it
 localises a kernel whose two builds disagree, which is a platform bug the simulator would otherwise hide.
 
-**Currently: all twelve cases are bit-identical**, across `opz_sine`, `opz_saw_blep`, `opz_noise`, `opz_soft`,
-`opz_lerp`, `opz_blep_recip`, `opz_exp2_q16`, `opz_svf_coef`, `opz_svf` and the `opz_mix_mono` Blackfin loops.
-That is what confines the known `test_opz_cycles` divergence (`opz_mul_q31`, `opz_mul_q31_q15`, `opz_svf`) to the
-edge inputs that check folds in.
+Each case reports three things, and the equality of the digests is only the first: the digest, `nz` (frames
+that carried any signal out of frames rendered) and `step` (the largest sample-to-sample jump, in 1/1024 of full
+scale). The other two exist because equality alone is not evidence — an earlier version of this harness held the
+envelope with `step = 0`, so the amplitude died after the first frame of every block and both builds agreed on
+63/64 of a second of silence. That version reports `nz 47/3072`; the working one reports `nz 3071/3072`.
 
-Slot 74, plug id 61204, device image **4,060 of 5,120 B (79 %)**. It was 5,544 before the review: the 64-bit divide
+Every case runs four times: a held note, a rising glide, a falling glide and a glide that starts *above* the
+increment ceiling and falls back through it — all from the same starting pitch, so the variants differ only in
+`pitchSlope`. `render` rebuilds the BLEP reciprocal on every sample while `pitchSlope != 0`, and a gate that only
+ever passed 0 never ran that path. The variants must have distinct digests, which is also the only cheap way to
+prove a renderer is not silently ignoring the slope; the over-ceiling one is what separates advancing the raw
+pitch from advancing the clamped increment.
+
+**Currently: all 48 cases are bit-identical**, across `opz_sine`, `opz_saw_blep`, `opz_noise`, `opz_soft`,
+`opz_blep_recip`, `opz_exp2_q16`, `opz_svf_coef`, `opz_svf` and the `opz_mix_mono` Blackfin loops. That is
+what confines the known `test_opz_cycles` divergence (`opz_mul_q31`, `opz_mul_q31_q15`, `opz_svf`) to the edge
+inputs that check folds in.
+
+What it cannot see, stated plainly: a mistake made *identically in both builds*. Equality is blind to that, and
+the `step` metric does not close the gap — a reciprocal left stale for a whole block changes the digests but
+moves `step` by nothing measurable (101 → 103 across slopes from 3 % to 32 % pitch change), because the error is
+about a thousandth of full scale. Catching that class needs an independent reference implementation inside the
+harness, which this does not have.
+
+Slot 74, plug id 61204, device image **4,144 of 5,120 B (81 %)**. It was 5,544 before the review: the 64-bit divide
 that computed the filter's reciprocal pulled `___divdi3` into the image — 1,206 bytes, a fifth of the window, for
 one division per block. Done in 32 bits it is gone, and the image came down by 1.5 KB.
 

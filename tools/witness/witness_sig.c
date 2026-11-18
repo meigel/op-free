@@ -1,5 +1,5 @@
 /*
- * witness_sig.c — one FNV-1a digest per (mode, depth) of the witness engine, rendered by the engine itself.
+ * witness_sig.c — one FNV-1a digest per (mode, depth, glide) of the witness engine, rendered by the engine itself.
  *
  * This is the differential gate the engine exists for. The same source is built twice:
  *
@@ -10,13 +10,26 @@
  * kernel whose host build and device build disagree — which the simulator would otherwise hide, because the
  * host renders are the only renders anyone listens to here.
  *
+ * Equality alone is not enough, and this file learned that the hard way: an earlier version held the envelope
+ * with step = 0, so the amplitude collapsed after the first frame of every block and both builds happily agreed
+ * on 63/64 of a second of silence. Every case therefore also reports, next to its digest:
+ *
+ *   nz    frames with any non-zero sample, out of frames rendered. A case where signal dies inside each block
+ *         is a zero here, whatever the digests say.
+ *   step  the largest single-sample jump in thousand-and-a-bitths of full scale (units of 1/1024). A band-limited
+ *         oscillator changes by little between samples; a stale or mis-normalised BLEP residual puts a step
+ *         there, which two builds that share the mistake would both produce and both agree on.
+ *
+ * The glide cases matter for the same reason: `render` receives pitchSlope and must rebuild the BLEP reciprocal
+ * every sample while it is non-zero, and a gate that only ever passes 0 never exercises that path.
+ *
  * What it deliberately does NOT cover: the host's ADSR model (the callback below holds the envelope flat, so
  * the engine's own amplitude law is what is under test) and voice allocation. Those are the host's, and
  * sim/tests already covers them.
  *
- * Output: one "mode <m> d<ddd> <digest>" per case, then "cases <n>" so the test never hard-codes how many
- * there are, then "done". Both channels are hashed: opz_mix_mono computes its left and right gains on separate
- * paths, so a device-only error in the right one has to show up.
+ * Output: one "mode <m> d<ddd> g<0|+|-> <digest> nz <n>/<n> step <n>" per case, then "cases <n>", then "done".
+ * Both channels are hashed: opz_mix_mono computes its left and right gains on separate paths, so a device-only
+ * error in the right one has to show up.
  *
  * MIT licence, see CONTRIBUTING.md.
  */
@@ -91,6 +104,14 @@ static uint32_t word(int b) { return (uint32_t)b * 0x808080u + ((uint32_t)b >> 1
  * comparison. 130.812783 Hz at 44.1 kHz in Q32 = 0x00c265db. */
 #define PITCH_C3 0x00c265dbu
 
+/* Glide slopes in Q32 increments per sample. 128 over 3072 samples moves the pitch by 393216 increments, ~3.1 %
+ * at C3: enough that a stale reciprocal is a different number of samples after every block, small enough that
+ * the case stays far from both clamps. */
+#define SLOPE 128
+
+/* The engine's ceiling, repeated here so the over-ceiling case starts where the harness means it to. */
+#define INC_MAX_PITCH 0x40000000u
+
 static uint32_t s_hash;
 static void mix(uint32_t v)
 {
@@ -105,16 +126,14 @@ static void digits(char *d, int v, int width)
     for (int i = width - 1; i >= 0; i--) { d[i] = (char)('0' + v % 10); v /= 10; }
 }
 
-static void line(const char *name)
+static uint32_t hexline(char *buf, const char *name)
 {
     static const char hex[] = "0123456789abcdef";
-    char buf[80];
     uint32_t n = 0;
-    while (*name && n < 56) buf[n++] = *name++;
+    while (*name && n < 40) buf[n++] = *name++;
     buf[n++] = ' ';
     for (int k = 28; k >= 0; k -= 4) buf[n++] = hex[(s_hash >> k) & 15];
-    buf[n++] = '\n';
-    put(buf, n);
+    return n;
 }
 
 int main(void)
@@ -134,50 +153,96 @@ int main(void)
     static const int filter[] = { 255, 200, 96 };     /* open, mid, low enough for a peak */
     static const int reso[] = { 0, 64, 200 };
     static const int depth[] = { 0, 85, 170, 255 };
+    /* 0 = held note, +1 = rising glide, -1 = falling glide, +2 = from above the ceiling, falling. The glide
+     * cases exist because `render` rebuilds the BLEP reciprocal per sample while pitchSlope != 0, and a gate
+     * that only ever passes 0 cannot see it. The last one exists because the increment is clamped while the
+     * *raw* pitch may sit above the ceiling: an engine that advances the clamped increment instead of the raw
+     * pitch starts falling immediately, one that advances the raw pitch stays pinned for 16 samples first. */
+    static const int glide[] = { 0, 1, -1, 2 };
     const int modes = (int)(sizeof p1 / sizeof p1[0]);
     const int depths = (int)(sizeof depth / sizeof depth[0]);
+    const int glides = (int)(sizeof glide / sizeof glide[0]);
+    const uint32_t frames_per_case = (uint32_t)BLOCKS * OPZ_BLOCK_FRAMES;
     int cases = 0;
 
     for (int m = 0; m < modes; m++) {
         for (int d = 0; d < depths; d++) {
-            for (int i = 0; i < OPZ_NUM_PARAMS; i++) params[i] = word(128);
-            params[OPZ_P_P1] = word(p1[m]);
-            params[OPZ_P_P2] = word(depth[d]);
-            params[OPZ_P_FILTER] = word(filter[m]);
-            params[OPZ_P_RESONANCE] = word(reso[m]);
-            params[OPZ_P_PAN] = word(128);
-            params[OPZ_P_LEVEL] = word(255);
+            for (int g = 0; g < glides; g++) {
+                for (int i = 0; i < OPZ_NUM_PARAMS; i++) params[i] = word(128);
+                params[OPZ_P_P1] = word(p1[m]);
+                params[OPZ_P_P2] = word(depth[d]);
+                params[OPZ_P_FILTER] = word(filter[m]);
+                params[OPZ_P_RESONANCE] = word(reso[m]);
+                params[OPZ_P_PAN] = word(128);
+                params[OPZ_P_LEVEL] = word(255);
 
-            State *s = (State *)state_mem;
-            ADSR *env = (ADSR *)env_mem;
-            init(s, 0, 0, 0, 0);
-            OPZ_ADSR_LEVEL(env) = OPZ_Q31_ONE;
-            OPZ_ADSR_STAGE(env) = 1;
-            OPZ_ADSR_COEF(env) = 0;
-            OPZ_ADSR_STEP(env) = OPZ_Q31_ONE;
-            onNoteOn(48, 100, s, params);
+                State *s = (State *)state_mem;
+                ADSR *env = (ADSR *)env_mem;
+                init(s, 0, 0, 0, 0);
+                OPZ_ADSR_LEVEL(env) = OPZ_Q31_ONE;
+                OPZ_ADSR_STAGE(env) = 1;
+                OPZ_ADSR_COEF(env) = 0;
+                OPZ_ADSR_STEP(env) = OPZ_Q31_ONE;
+                onNoteOn(48, 100, s, params);
 
-            s_hash = 2166136261u;
-            for (int b = 0; b < BLOCKS; b++) {
-                for (int i = 0; i < 2 * OPZ_BLOCK_FRAMES; i++) out[i] = 0;
-                render(out, PITCH_C3, 0, s, params, env);
-                for (int i = 0; i < OPZ_BLOCK_FRAMES; i++) {
-                    mix((uint32_t)out[2 * i]);          /* left */
-                    mix((uint32_t)out[2 * i + 1]);      /* right: separate gain path in opz_mix_mono */
+                /*    All three variants start at the same pitch and differ only in pitchSlope. Centring the glide
+                 *    on C3 would make them differ in *starting pitch* too, and then a renderer that ignored the
+                 *    slope would still produce three different digests -- the coverage assertion would pass
+                 *    while testing nothing. With a common start, identical digests mean the slope was ignored. */
+                int32_t slope = (int32_t)glide[g] * SLOPE;
+                uint32_t pitch = PITCH_C3;
+                if (glide[g] == 2) {              /* over the ceiling, falling fast enough to come back down */
+                    pitch = INC_MAX_PITCH + 65536u;
+                    slope = -4096;
                 }
-            }
 
-            char name[64];
-            uint32_t n = 0;
-            const char *p = "mode ";
-            while (*p) name[n++] = *p++;
-            digits(&name[n], m, 1); n += 1;
-            name[n++] = ' ';
-            name[n++] = 'd';
-            digits(&name[n], depth[d], 3); n += 3;
-            name[n] = 0;
-            line(name);
-            cases++;
+                uint32_t nz = 0;
+                int32_t prev = 0;
+                uint32_t step = 0;                    /* largest sample-to-sample jump, 1/1024 of full scale */
+
+                s_hash = 2166136261u;
+                for (int b = 0; b < BLOCKS; b++) {
+                    for (int i = 0; i < 2 * OPZ_BLOCK_FRAMES; i++) out[i] = 0;
+                    render(out, pitch, slope, s, params, env);
+                    for (int i = 0; i < OPZ_BLOCK_FRAMES; i++) {
+                        const int32_t l = out[2 * i];
+                        mix((uint32_t)l);               /* left */
+                        mix((uint32_t)out[2 * i + 1]);  /* right: separate gain path in opz_mix_mono */
+                        if (l != 0 || out[2 * i + 1] != 0) nz++;
+                        /* 64-bit so the extreme pair (-2^31, 2^31-1) cannot wrap into a small step. */
+                        int64_t diff = (int64_t)l - (int64_t)prev;
+                        if (diff < 0) diff = -diff;
+                        if ((uint64_t)(diff >> 21) > step) step = (uint32_t)(diff >> 21);
+                        prev = l;
+                    }
+                }
+
+                char name[48], buf[96];
+                uint32_t n = 0;
+                const char *p = "mode ";
+                while (*p) name[n++] = *p++;
+                digits(&name[n], m, 1); n += 1;
+                name[n++] = ' ';
+                name[n++] = 'd';
+                digits(&name[n], depth[d], 3); n += 3;
+                name[n++] = ' ';
+                name[n++] = 'g';
+                name[n++] = glide[g] == 2 ? '^' : (glide[g] > 0 ? '+' : (glide[g] < 0 ? '-' : '0'));
+                name[n] = 0;
+
+                uint32_t k = hexline(buf, name);
+                const char *nzs = " nz ";
+                while (*nzs) buf[k++] = *nzs++;
+                digits(&buf[k], (int)nz, 4); k += 4;
+                buf[k++] = '/';
+                digits(&buf[k], (int)frames_per_case, 4); k += 4;
+                const char *sts = " step ";
+                while (*sts) buf[k++] = *sts++;
+                digits(&buf[k], (int)step, 5); k += 5;
+                buf[k++] = '\n';
+                put(buf, k);
+                cases++;
+            }
         }
     }
 
@@ -191,7 +256,13 @@ int main(void)
         put(buf, n);
     }
 
-    line("done");
+    {
+        char buf[8];
+        const char *d = "done\n";
+        uint32_t n = 0;
+        while (*d) buf[n++] = *d++;
+        put(buf, n);                   /* no digest: a hash left over from the last case reads like a case */
+    }
     bench_exit(0);
     return 0;
 }
