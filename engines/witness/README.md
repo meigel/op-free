@@ -12,11 +12,11 @@ so the per-sample cost is that of one kernel and not of three, and each answers 
 |---|---|---|---|---|
 | 0–85 | sine | `opz_sine` | blends a clean sine toward `opz_soft` drive | harmonic distortion, **−62.4 → −23.5 dB** |
 | 86–170 | saw | `opz_saw_blep` | blends the band-limited saw toward the naive ramp, removing the correction | inharmonic energy at C6, **−28.6 → −18.2 dB** |
-| 171–255 | noise | `opz_noise` + BLEP saw | blends saw toward white noise | spectral flatness, **−9.4 → −1.8 dB** |
+| 171–255 | noise | `opz_noise` + BLEP saw | blends saw toward white noise | spectral flatness, **−9.4 → −1.7 dB** |
 
 All three are monotone over the full dial, measured through `opzsim` on a held C3 (C6 for the saw mode, where the
-alias lands) — see `docs/` for the analysis commands. The resonant peak follows the filter word: **130 Hz at
-`filter` 40 to 3,690 Hz at 200**, monotone, which is what makes the noise mode a filter measurement.
+alias lands) — see `docs/` for the analysis commands. The resonant peak follows the filter word: **65 Hz at `filter` 40, 160 Hz at 80, 440 Hz at 120,
+1,290 Hz at 160, 3,505 Hz at 200**, monotone, which is what makes the noise mode a filter measurement.
 
 The saw mode is worth a sentence: scaling the PolyBLEP residual looks like "less correction" and is not — at zero
 the residual becomes a full-scale step once per cycle, which is worse than either end and non-monotone in every
@@ -25,6 +25,22 @@ metric tried. Blending the whole waveform against the raw ramp is the honest way
 The filter is the engine's own (`flags 0x04`, see below), and it is **always in circuit**: `filter` 255 is 16 kHz,
 not a bypass. A diagnostic wants one disposition — if the cost or the transfer function changed with the knob,
 the measurement would be of the knob rather than of the mode.
+
+## The filter saturates, and from where
+
+`opz_svf`'s adds saturate, and a resonant peak of gain ~Q drives them past full scale long before the dial reaches
+255. Measured on the clean sine (`P2` 0) with the cutoff near the note (`filter` 92), third-harmonic distortion:
+
+```
+resonance    0     32     64    128    255
+THD      -80.7  -16.7  -15.9  -15.6  -15.6 dB
+```
+
+So the filter is linear at `resonance` 0 and effectively a saturating resonant filter from about 32 upward. That
+is the platform's SVF, not this engine's choice, and it is why every metric in the table above is measured with
+`resonance` at 0. That is also the honest reading of the presets: the sine and saw banks sit at `resonance` 0,
+where the filter is linear, and the two noise banks sit at 20 and 40, where it is deliberately not — a resonant
+peak is the whole point of them. Up to Q ~1 is where the "clean reference" claim actually holds.
 
 ## The parameter words
 
