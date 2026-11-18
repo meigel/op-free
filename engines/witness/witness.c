@@ -100,13 +100,6 @@ static fract32 blend_q15(fract32 a, fract32 b, int32_t wa, int32_t wb)
     return opz_add_q31(opz_mul_q31_q15(a, wa), opz_mul_q31_q15(b, wb));
 }
 
-static int32_t inc_bound(int32_t x)
-{
-    if (x < INC_MIN) return INC_MIN;
-    if (x > (int32_t)INC_MAX) return (int32_t)INC_MAX;
-    return x;
-}
-
 /* ---- entry points ---------------------------------------------------------------------------------------------- */
 
 uint32_t initModule(uint32_t version, const ModuleCallbackInterface *cb, uint32_t *memRequest)
@@ -176,9 +169,16 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
     const OpzSvfCoef coef = opz_svf_coef(fc_q16, k_q30);
 
     /*    The host's pitch is an unsigned Q32 increment. Casting it to int32_t first makes every value above
-     *    2^31 negative, which inc_bound then clamps to INC_MIN -- a note near the ceiling would arrive as a
-     *    sub-audio drone instead of at 11 kHz. Clamp the unsigned value. */
-    uint32_t inc = pitch > INC_MAX ? INC_MAX : (pitch < INC_MIN ? (uint32_t)INC_MIN : pitch);
+     *    2^31 negative, which the clamp below would then send to INC_MIN -- a note near the ceiling would
+     *    arrive as a sub-audio drone instead of at 11 kHz. Clamp the unsigned value.
+     *
+     *    The glide then advances *that* raw pitch and re-derives the increment from it, rather than advancing
+     *    the clamped increment. Advancing the clamped one loses information above the ceiling: a downward glide
+     *    started from an over-ceiling pitch would begin at INC_MAX and fall immediately, and a glide that
+     *    wandered above the ceiling would come back at the wrong value on the next block. The raw pitch is a
+     *    wrap-around accumulator by definition, so adding the slope to it unsigned is exact. */
+    uint32_t raw_pitch = pitch;
+    uint32_t inc = raw_pitch > INC_MAX ? INC_MAX : (raw_pitch < INC_MIN ? (uint32_t)INC_MIN : raw_pitch);
     uint32_t recip = opz_blep_recip(inc);
     /*    And the reciprocal must follow the increment: opz_saw_blep's residual is computed against 1/dt of the
      *    increment passed with it, so a glide that leaves the reciprocal at the block's first value applies a
@@ -211,8 +211,11 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
             mono[i] = opz_mul_q31_q15(lp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));
             level = opz_env_tick(level, env_coef, step);
             ph += inc;
-            inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
-            if (gliding) recip = opz_blep_recip(inc);   /* the next sample's residual needs its own 1/dt */
+            if (gliding) {
+                raw_pitch += (uint32_t)pitchSlope;      /* the pitch is a wrap-around accumulator */
+                inc = raw_pitch > INC_MAX ? INC_MAX : (raw_pitch < INC_MIN ? (uint32_t)INC_MIN : raw_pitch);
+                recip = opz_blep_recip(inc);            /* the next sample's residual needs its own 1/dt */
+            }
         }
     } else if (mode == 1) {
         for (int i = 0; i < N; i++) {
@@ -222,8 +225,11 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
             mono[i] = opz_mul_q31_q15(lp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));
             level = opz_env_tick(level, env_coef, step);
             ph += inc;
-            inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
-            if (gliding) recip = opz_blep_recip(inc);   /* the next sample's residual needs its own 1/dt */
+            if (gliding) {
+                raw_pitch += (uint32_t)pitchSlope;      /* the pitch is a wrap-around accumulator */
+                inc = raw_pitch > INC_MAX ? INC_MAX : (raw_pitch < INC_MIN ? (uint32_t)INC_MIN : raw_pitch);
+                recip = opz_blep_recip(inc);            /* the next sample's residual needs its own 1/dt */
+            }
         }
     } else {
         for (int i = 0; i < N; i++) {
@@ -234,8 +240,11 @@ void render(fract32 *out, uint32_t pitch, int32_t pitchSlope, void *state, const
             mono[i] = opz_mul_q31_q15(bp, (int32_t)(opz_mul_q31_q15(amp, level >> 16) >> 16));       /* the peak, not the passband: measurable anywhere */
             level = opz_env_tick(level, env_coef, step);
             ph += inc;
-            inc = (uint32_t)inc_bound((int32_t)inc + pitchSlope);
-            if (gliding) recip = opz_blep_recip(inc);   /* the next sample's residual needs its own 1/dt */
+            if (gliding) {
+                raw_pitch += (uint32_t)pitchSlope;      /* the pitch is a wrap-around accumulator */
+                inc = raw_pitch > INC_MAX ? INC_MAX : (raw_pitch < INC_MIN ? (uint32_t)INC_MIN : raw_pitch);
+                recip = opz_blep_recip(inc);            /* the next sample's residual needs its own 1/dt */
+            }
         }
     }
 

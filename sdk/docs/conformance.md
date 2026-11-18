@@ -26,13 +26,21 @@ the engine, not in the metric.
 
 Every one of those is measured with `resonance` at 0, because `opz_svf`'s adds saturate: on the clean sine at
 `filter` 92 the third harmonic sits at **−80.7 dB at resonance 0 and −16.7 dB at 32**, so from about 32 upward the
-filter is a saturating resonant filter rather than a linear one. That is the platform's kernel, and it is why the
-metrics — and the presets — stay in the linear region.
+filter is a saturating resonant filter rather than a linear one. That is the platform's kernel, hence the metrics
+are all measured at `resonance` 0.
 
-The saw mode is worth understanding before extending it, because the obvious implementation is wrong. Scaling the
-`recip` argument — the reciprocal of the increment that the PolyBLEP residual is normalised against — is not
-"scaling the correction down": it changes the width of the polynomial's window, and at zero the residual collapses
-to a full-scale step once per cycle. Measured that way the inharmonic energy went *down* from depth 0 to 192 and
+The presets are not uniform about it, and should not be read as a set of clean references: the sine and saw banks
+sit at `resonance` 0, inside the linear region, while the two noise banks run at 20 and 40 — deliberately outside
+it, because a resonant peak over white noise is what they exist to demonstrate.
+
+The saw mode is worth understanding before extending it, because the obvious implementation is wrong, and also
+because the obvious *explanation* of why it is wrong is wrong. `opz_saw_blep` selects the corrected samples with
+`phase + inc < 2u * inc`, which depends on the increment and not at all on `recip`: the window is fixed. What
+`recip` does is normalise the polynomial's argument — `x = phase * recip`, i.e. t/dt — inside that fixed window.
+Scaling it therefore mis-normalises `x` rather than narrowing anything, so the polynomial is evaluated at the
+wrong place and jumps at the window edges; at zero, `x` is zero throughout and the correction degrades to a
+full-scale step once per cycle. The distinction matters because it predicts what a wrong `recip` looks like:
+discontinuities at the window boundaries, not a gentler correction. Measured that way the inharmonic energy went *down* from depth 0 to 192 and
 then jumped back up at 255 — non-monotone, and worse than either end. What removes a correction is blending the
 whole waveform against the raw phase ramp, with two Q15 weights so the difference never saturates; then the metric
 is monotone and it exposes what the kernel buys: 10.4 dB of inharmonic energy at C6.
@@ -51,18 +59,20 @@ disposition: if the cost and the transfer function changed with the knob, the me
 
 ```
 mode     cycles/sample/voice   max (knobs moving)
-sine     210.8                 211.0
-saw      170.3                 172.2
-noise    182.3                 184.1
+sine     204.0                 204.2
+saw      161.5                 163.4
+noise    173.3                 175.2
 ```
 
-Over the 167 line on purpose. That line is the worst case for 19 sounding voices across all eight tracks, and the
+The saw mode sits under the 167 line, the sine and noise modes over it — the difference is the oscillator kernel,
+not the filter, which every mode pays. That line is the worst case for 19 sounding voices across all eight tracks,
+and the
 timed stage is one shared pool; the per-voice allowance rises as fewer voices sound (16 → 200, 12 → 268, 8 → 405,
 per the table in [cpu-headroom.md](../../research/cpu-headroom.md) §1). So this engine is affordable when it is the
 only thing playing and its tracks are mono — the 405 figure is for eight sounding voices with *every* track mono,
 not for one instrument on its own.
 
-Render stack: 412 B, voice state 28 B of the 280 allowed, device image 4,060 of 5,120 B — 79 % of slot 74, with room for a fourth
+Render stack: 412 B, voice state 28 B of the 280 allowed, device image 4,144 of 5,120 B — 81 % of slot 74, with room for a fourth
 mode.
 
 The image is worth a note because it nearly cost the slot: the filter's reciprocal was written as a 64-bit divide,
@@ -86,7 +96,7 @@ simulator renders with what the device renders.
 
 ### What it currently says
 
-All twelve cases are bit-identical today, across `opz_sine`, `opz_saw_blep`, `opz_noise`, `opz_soft`, `opz_lerp`,
+All 48 cases are bit-identical today, across `opz_sine`, `opz_saw_blep`, `opz_noise`, `opz_soft`,
 `opz_blep_recip`, `opz_exp2_q16`, `opz_svf_coef`, `opz_svf` and the `opz_mix_mono` Blackfin loops. That is
 informative rather than empty, because `test_opz_cycles` reports three helpers whose two builds disagree:
 
@@ -101,6 +111,25 @@ this engine exercises agree on *these* inputs; they say nothing about `sdk_check
 edge values with `pick()`-drawn ones. The working hypothesis stays what it was — the disagreement is in the edge
 inputs (`0x80000000`, `0x7fffffff`, ±`0x40000000`, …) — and the open failure stays visible in `test_opz_cycles`
 with its scope stated, rather than being papered over by a gate that happens to pass.
+
+### What the gate cannot see
+
+Equality between two builds is blind to a mistake both make, and this harness learned it the hard way: for a while
+it held the envelope with `step = 0`, which zeroed the amplitude after the first frame of every block, and it
+happily reported twelve identical digests for 63/64 of a second of silence. Each case therefore also prints `nz`
+(frames that carried signal, out of frames rendered) and `step` (largest sample-to-sample jump, in 1/1024 of full
+scale), and the test asserts on both. Against the broken envelope the same case reports `nz 47/3072`; against the
+working engine, `3071/3072`.
+
+Every case also runs a held note, a rising glide and a falling glide from a common starting pitch, because
+`render` rebuilds the BLEP reciprocal per sample while `pitchSlope != 0` and the original gate never passed a
+slope at all. Distinct digests across the three are asserted, so a renderer that ignored the slope would fail.
+
+What none of that covers is a flaw present in *both* builds. `step` in particular is not a stale-reciprocal
+detector, though it was added hoping to be one: measured, leaving `recip` stale for a whole block changes every
+digest and moves `step` from 101 to 103 — at pitch changes from 3 % up to 32 % — because the error is about a
+thousandth of full scale. Detecting that class requires an independent reference implementation inside the
+harness; there is none, and the honest position is that it is protected by review, not by this gate.
 
 ## Adding a mode
 
