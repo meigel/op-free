@@ -25,6 +25,25 @@ into how the OP-Z firmware works, as the ground for firmware mods later.
 | [`firmware-mods/`](firmware-mods/) | Coming soon: the mod format and the builder that applies mods to *your own* firmware file |
 | [`ROADMAP.md`](ROADMAP.md) | The plan and what's next |
 
+## Hear one now
+
+```bash
+tools/play.sh              # crease, its basic scenario — builds the simulator on first use
+tools/play.sh --list       # all 33 engines: id, memory slot, trackmask, kind, scenarios
+tools/play.sh table        # any of them, by name
+tools/play.sh crease --fx plate   # through an effect
+```
+
+It reads the slot and trackmask from the engine's `plug.json`, picks a scenario from its `tests/`, renders, prints
+peak and RMS, and plays the file. The browser equivalent is `make -C sim wasm` then `npm --prefix sim/web run dev`
+(eight tracks and two effects, playable with the keyboard or a real OP-Z over MIDI).
+
+**Which engines are ours.** `engines/` is the community set; this fork adds two of its own —
+[`crease`](engines/crease/) (a wavefolder voice, plug 60906) and [`witness`](engines/witness/) (a conformance
+instrument that dials known defects in, so the platform's own checks have an engine to catch, plug 61204).
+`tools/play.sh --list` is the live inventory; `engines/README.md` is generated from the lab, so that table is not
+where an engine gets added.
+
 ## How engines get onto an OP-Z
 
 Every OP-Z synth and effect is a small DSP module that the OS loads from its storage and calls through a few
