@@ -38,6 +38,27 @@ sim/build/opzsim -e sim/build/engines/opz_test_sine.dylib --fx sim/build/engines
 Exit codes: `0` ok, `1` usage or I/O, `2` engine refused (missing export, both or neither of `render`/`renderFX`,
 `initModule` returned 0), `3` a scenario expectation failed, `4` an ABI or budget rule was broken.
 
+## One command, instead of three lookups
+
+`tools/play.sh` writes the `-e`, `--trackmask` and scenario arguments for you, from the engine's own `plug.json`, and
+hands the render to whatever audio player the machine has:
+
+```bash
+tools/play.sh                  # crease, its basic scenario
+tools/play.sh table            # any engine in engines/
+tools/play.sh dx knobs         # a scenario from engines/dx/tests/
+tools/play.sh crease --fx plate    # through an effect
+tools/play.sh --list           # every engine: id, memory slot, trackmask, kind, scenario count
+```
+
+It builds the simulator and the engines on first use, ignores the render on the way out unless you pass `--out`, and
+prints peak, RMS and the clipped count. The memory slot is **not** passed by default: it only switches on the
+static-size gate, whose host-build estimate runs larger than the target's and rejects engines that fit on the device
+(`plate` is 14,490 B on the host and inside 10 KB there). Pass `--slot N` when you want that gate.
+
+Its exit code follows `opzsim`'s: `0` good, `3` the scenario's own expectations did not hold (the file is still
+rendered and played — an effect's tail legitimately breaks a silence assertion), `4` an ABI violation, which is fatal.
+
 ## What the host does
 
 | Behaviour | Source |

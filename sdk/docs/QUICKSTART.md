@@ -7,6 +7,7 @@ first.
 ```text
 scaffold ──► simulator (sound, golden renders) ──► device build ──► crash check ──► cycle count ──► install (--fake)
  opz.py new     make -C sim golden / test           opz_build.py     opz_crashcheck   opz_cycles     opz.py --fake
+                tools/play.sh NAME   (one command, optional)
                 web simulator (play it, optional)
                 make -C sim wasm, sim/web
 ```
@@ -119,7 +120,8 @@ names are refused.
 Render the scenarios once and keep the results as the engine's golden references:
 
 ```bash
-make -C sim golden ENGINE=wobble
+tools/play.sh wobble                        # render and play, one command
+make -C sim golden ENGINE=wobble            # render and keep them as the golden references
 ```
 
 The WAVs are in `sim/build/renders/wobble/`: listen to them. The hashes go to `engines/wobble/tests/golden/`.
